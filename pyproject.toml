@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gywadmin-oci"
+version = "0.1.0"
+description = "OCI Vault + initialization helpers for gywadmin-homelab"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "initialgyw" },
+]
+dependencies = [
+    "oci==2.181.0",
+    "cryptography>=42.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/initialgyw/gywadmin-oci"
+Repository = "https://github.com/initialgyw/gywadmin-oci"
+
+[project.scripts]
+manage-vault = "gywadmin_oci.manage_vault:main"
+initialize-oci = "gywadmin_oci.initialize_oci:main"
+update-github-secrets = "gywadmin_oci.update_github_secrets:main"
