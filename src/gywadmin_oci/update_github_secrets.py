@@ -147,9 +147,7 @@ def set_github_secret(
     try:
         result = runner(argv, stdin_bytes, timeout)
     except subprocess.TimeoutExpired:
-        log.error(
-            "Timed out after %ds setting secret %s", int(timeout), secret_name
-        )
+        log.error("Timed out after %ds setting secret %s", int(timeout), secret_name)
         return False
     # FileNotFoundError propagates to the caller (maps to exit 2).
 

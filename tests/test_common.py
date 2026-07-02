@@ -29,6 +29,7 @@ class TestOciSummarySecretsMoved:
             "TF_VAR_private_key_password",
         ]
         from dataclasses import fields as dc_fields
+
         assert [f.name for f in dc_fields(OciSummarySecrets)] == fields
 
     def test_from_initialize_oci_summary_works(self):
@@ -53,7 +54,10 @@ class TestOciSummarySecretsMoved:
         assert instance.OCI_CLI_TENANCY == "ocid1.tenancy.oc1..aaaa"
         assert instance.OCI_CLI_USER == "ocid1.user.oc1..bbbb"
         assert instance.OCI_CLI_FINGERPRINT == "aa:bb:cc:dd"
-        assert instance.OCI_CLI_KEY_CONTENT == "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----\n"
+        assert (
+            instance.OCI_CLI_KEY_CONTENT
+            == "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----\n"
+        )
         assert instance.TF_VAR_private_key_password == "p@ssw0rd"
 
     def test_validate_summary_file_importable(self, tmp_path):
@@ -113,15 +117,15 @@ class TestAtomicWrite:
 
     def test_atomic_write_cleans_up_tempfile_on_failure(self, tmp_path, monkeypatch):
         target = tmp_path / "file.bin"
-        
+
         def mock_replace(src, dst):
             raise OSError("mock error")
-            
+
         monkeypatch.setattr(os, "replace", mock_replace)
-        
+
         with pytest.raises(OSError, match="mock error"):
             atomic_write(target, b"hello")
-            
+
         assert not target.exists()
         files = list(tmp_path.iterdir())
         assert len(files) == 0
@@ -129,7 +133,7 @@ class TestAtomicWrite:
     def test_atomic_write_atomic_rename(self, tmp_path):
         target = tmp_path / "file.bin"
         atomic_write(target, b"old")
-        
+
         # We can't easily test the exact moment of rename without threading,
         # but we can verify that after the call, it's exactly the new content.
         atomic_write(target, b"new")
@@ -144,4 +148,6 @@ class TestAtomicWrite:
 
 class TestModuleConstants:
     def test_default_summary_path_constant(self):
-        assert DEFAULT_SUMMARY_PATH == Path("script_outputs/initialize-oci-summary.json")
+        assert DEFAULT_SUMMARY_PATH == Path(
+            "script_outputs/initialize-oci-summary.json"
+        )

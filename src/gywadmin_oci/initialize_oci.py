@@ -101,7 +101,7 @@ DEFAULT_OCI_CONFIG = "~/.oci/config"
 DEFAULT_OCI_PROFILE = "DEFAULT"
 
 # Polling / waiting
-DEFAULT_WAIT_SECONDS = 1800   # 30 min ceiling: vaults can take 10-15 min
+DEFAULT_WAIT_SECONDS = 1800  # 30 min ceiling: vaults can take 10-15 min
 DEFAULT_INTERVAL_SECONDS = 30
 
 # RSA key size for OCI API signing key. OCI accepts up to 4096 bits.
@@ -442,7 +442,12 @@ def ensure_compartment(ctx: Context) -> str:
     ]
     if existing:
         comp = existing[0]
-        log.info("compartment '%s' exists [%s, state=%s]", name, comp.id, comp.lifecycle_state)
+        log.info(
+            "compartment '%s' exists [%s, state=%s]",
+            name,
+            comp.id,
+            comp.lifecycle_state,
+        )
         if comp.lifecycle_state != "ACTIVE":
             _wait_for_state(
                 lambda: ctx.identity.get_compartment(comp.id),
@@ -455,7 +460,11 @@ def ensure_compartment(ctx: Context) -> str:
         return comp.id
 
     if ctx.dry_run:
-        log.info("[DRY-RUN] would create compartment '%s' under tenancy %s", name, ctx.tenancy_ocid)
+        log.info(
+            "[DRY-RUN] would create compartment '%s' under tenancy %s",
+            name,
+            ctx.tenancy_ocid,
+        )
         return _dry_run_ocid("compartment")
 
     log.info("Creating compartment '%s' under tenancy %s", name, ctx.tenancy_ocid)
@@ -508,7 +517,9 @@ def ensure_bucket(ctx: Context, compartment_ocid: str) -> Tuple[str, str]:
             raise
 
     if ctx.dry_run:
-        log.info("[DRY-RUN] would create bucket '%s' in namespace '%s'", name, namespace)
+        log.info(
+            "[DRY-RUN] would create bucket '%s' in namespace '%s'", name, namespace
+        )
         return namespace, name
 
     log.info("Creating bucket '%s' in namespace '%s'", name, namespace)
@@ -552,7 +563,9 @@ def ensure_vault(ctx: Context, compartment_ocid: str) -> Tuple[str, str]:
     ]
     if existing:
         vault = existing[0]
-        log.info("vault '%s' exists [%s, state=%s]", name, vault.id, vault.lifecycle_state)
+        log.info(
+            "vault '%s' exists [%s, state=%s]", name, vault.id, vault.lifecycle_state
+        )
         if vault.lifecycle_state != "ACTIVE":
             vault = _wait_for_state(
                 lambda: ctx.kms_vault.get_vault(vault.id),
@@ -565,7 +578,11 @@ def ensure_vault(ctx: Context, compartment_ocid: str) -> Tuple[str, str]:
         return vault.id, vault.management_endpoint
 
     if ctx.dry_run:
-        log.info("[DRY-RUN] would create DEFAULT vault '%s' in compartment %s", name, compartment_ocid)
+        log.info(
+            "[DRY-RUN] would create DEFAULT vault '%s' in compartment %s",
+            name,
+            compartment_ocid,
+        )
         return _dry_run_ocid("vault"), _DRY_RUN_VAULT_MGMT_ENDPOINT
 
     log.info("Creating DEFAULT vault '%s' in compartment %s", name, compartment_ocid)
@@ -611,12 +628,15 @@ def ensure_master_encryption_key(
         log.info("[DRY-RUN] vault is a placeholder; would create MEK '%s'", name)
         return _dry_run_ocid("key")
 
-    mgmt = oci.key_management.KmsManagementClient(ctx.config, service_endpoint=management_endpoint)
+    mgmt = oci.key_management.KmsManagementClient(
+        ctx.config, service_endpoint=management_endpoint
+    )
 
     existing = [
         k
         for k in _list_all(mgmt.list_keys, compartment_id=compartment_ocid)
-        if k.display_name == name and k.lifecycle_state in {"ENABLED", "CREATING", "ENABLING"}
+        if k.display_name == name
+        and k.lifecycle_state in {"ENABLED", "CREATING", "ENABLING"}
     ]
     if existing:
         key = existing[0]
@@ -633,7 +653,11 @@ def ensure_master_encryption_key(
         return key.id
 
     if ctx.dry_run:
-        log.info("[DRY-RUN] would create MEK '%s' in vault management %s", name, management_endpoint)
+        log.info(
+            "[DRY-RUN] would create MEK '%s' in vault management %s",
+            name,
+            management_endpoint,
+        )
         return _dry_run_ocid("key")
 
     log.info("Creating MEK '%s' (AES-256, software-protected)", name)
@@ -671,7 +695,9 @@ def ensure_user(ctx: Context) -> str:
 
     existing = [
         u
-        for u in _list_all(ctx.identity.list_users, compartment_id=ctx.tenancy_ocid, name=name)
+        for u in _list_all(
+            ctx.identity.list_users, compartment_id=ctx.tenancy_ocid, name=name
+        )
         if u.name == name and u.lifecycle_state in {"ACTIVE", "CREATING"}
     ]
     if existing:
@@ -709,12 +735,16 @@ def ensure_group(ctx: Context) -> str:
 
     existing = [
         g
-        for g in _list_all(ctx.identity.list_groups, compartment_id=ctx.tenancy_ocid, name=name)
+        for g in _list_all(
+            ctx.identity.list_groups, compartment_id=ctx.tenancy_ocid, name=name
+        )
         if g.name == name and g.lifecycle_state in {"ACTIVE", "CREATING"}
     ]
     if existing:
         group = existing[0]
-        log.info("group '%s' exists [%s, state=%s]", name, group.id, group.lifecycle_state)
+        log.info(
+            "group '%s' exists [%s, state=%s]", name, group.id, group.lifecycle_state
+        )
         return group.id
 
     if ctx.dry_run:
@@ -762,7 +792,9 @@ def ensure_membership(ctx: Context, user_ocid: str, group_ocid: str) -> None:
 
     log.info("Adding user %s to group %s", user_ocid, group_ocid)
     ctx.identity.add_user_to_group(
-        oci.identity.models.AddUserToGroupDetails(user_id=user_ocid, group_id=group_ocid)
+        oci.identity.models.AddUserToGroupDetails(
+            user_id=user_ocid, group_id=group_ocid
+        )
     )
 
 
@@ -802,7 +834,9 @@ def _generate_api_key(passphrase: str) -> Dict[str, Any]:
     private_pem = private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.BestAvailableEncryption(passphrase.encode("utf-8")),
+        encryption_algorithm=serialization.BestAvailableEncryption(
+            passphrase.encode("utf-8")
+        ),
     )
     public_pem = public_key.public_bytes(
         encoding=serialization.Encoding.PEM,
@@ -875,7 +909,9 @@ def _write_credentials(
         "key_file": str(paths["private_key"]),
         "passphrase": passphrase,
     }
-    paths["credentials"].write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    paths["credentials"].write_text(
+        json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+    )
     _set_secure_perms(paths["credentials"], 0o600)
 
     config_section = (
@@ -932,7 +968,9 @@ def ensure_api_key(ctx: Context, user_ocid: str) -> Dict[str, Any]:
         try:
             stored = json.loads(paths["credentials"].read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            log.warning("Could not parse %s: %s; will regenerate.", paths["credentials"], exc)
+            log.warning(
+                "Could not parse %s: %s; will regenerate.", paths["credentials"], exc
+            )
             stored = None
         if stored and stored.get("fingerprint") in existing_fingerprints:
             log.info(
@@ -975,10 +1013,16 @@ def ensure_api_key(ctx: Context, user_ocid: str) -> Dict[str, Any]:
     log.info("Generating RSA-%d keypair for %s", RSA_KEY_BITS, sa_name)
     keypair = _generate_api_key(passphrase)
 
-    log.info("Uploading public key to OCI user %s [fingerprint=%s]", sa_name, keypair["fingerprint"])
+    log.info(
+        "Uploading public key to OCI user %s [fingerprint=%s]",
+        sa_name,
+        keypair["fingerprint"],
+    )
     ctx.identity.upload_api_key(
         user_ocid,
-        oci.identity.models.CreateApiKeyDetails(key=keypair["public_pem"].decode("utf-8")),
+        oci.identity.models.CreateApiKeyDetails(
+            key=keypair["public_pem"].decode("utf-8")
+        ),
     )
 
     _write_credentials(
@@ -1065,7 +1109,9 @@ def ensure_customer_secret_key(
     output_dir = ctx.args.output_dir
     paths = _credentials_paths(output_dir, sa_name)
     aws_path = paths["aws_credentials"]
-    display_name = f"{sa_name}-tf-{datetime.now(tz=timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+    display_name = (
+        f"{sa_name}-tf-{datetime.now(tz=timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+    )
 
     if ctx.dry_run and _is_dry_run_ocid(user_ocid):
         log.info(
@@ -1129,8 +1175,12 @@ def ensure_customer_secret_key(
     output_dir.mkdir(parents=True, exist_ok=True)
     _set_secure_perms(output_dir, 0o700)
 
-    log.info("Creating Customer Secret Key for %s (display_name=%s)", sa_name, display_name)
-    details = oci.identity.models.CreateCustomerSecretKeyDetails(display_name=display_name)
+    log.info(
+        "Creating Customer Secret Key for %s (display_name=%s)", sa_name, display_name
+    )
+    details = oci.identity.models.CreateCustomerSecretKeyDetails(
+        display_name=display_name
+    )
     resp = ctx.identity.create_customer_secret_key(details, user_ocid)
     access_key = resp.data.id
     secret_key = resp.data.key
@@ -1157,7 +1207,9 @@ def ensure_customer_secret_key(
 # ---------------------------------------------------------------------------
 # Policy
 # ---------------------------------------------------------------------------
-def _policy_statements(group_name: str, compartment_name: str, bucket_name: str) -> List[str]:
+def _policy_statements(
+    group_name: str, compartment_name: str, bucket_name: str
+) -> List[str]:
     """Build the IAM policy statements granting the SA group its access.
 
     Args:
@@ -1217,7 +1269,11 @@ def ensure_policy(
         existing_norm = {_normalize_statement(s) for s in (policy.statements or [])}
         missing = desired_norm - existing_norm
         if not missing:
-            log.info("policy '%s' exists and contains all required statements [%s]", name, policy.id)
+            log.info(
+                "policy '%s' exists and contains all required statements [%s]",
+                name,
+                policy.id,
+            )
             return policy.id
 
         if ctx.dry_run:
@@ -1282,7 +1338,9 @@ def write_summary(ctx: Context, payload: Dict[str, Any]) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     _set_secure_perms(output_dir, 0o700)
     summary_path = output_dir / "initialize-oci-summary.json"
-    summary_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    summary_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     _set_secure_perms(summary_path, 0o600)
     return summary_path
 
@@ -1333,7 +1391,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         compartment_ocid = ensure_compartment(ctx)
         namespace, bucket_name = ensure_bucket(ctx, compartment_ocid)
         vault_ocid, vault_mgmt_endpoint = ensure_vault(ctx, compartment_ocid)
-        mek_ocid = ensure_master_encryption_key(ctx, compartment_ocid, vault_mgmt_endpoint)
+        mek_ocid = ensure_master_encryption_key(
+            ctx, compartment_ocid, vault_mgmt_endpoint
+        )
         user_ocid = ensure_user(ctx)
         group_ocid = ensure_group(ctx)
         ensure_membership(ctx, user_ocid, group_ocid)

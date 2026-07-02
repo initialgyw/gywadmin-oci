@@ -6,6 +6,7 @@ Covers:
 * MAJOR-3: dry-run must not invoke ``prompt_destructive_confirm``.
 * Non-dry-run path must invoke ``prompt_destructive_confirm`` at least once.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -19,21 +20,21 @@ import pytest
 @pytest.mark.parametrize(
     "days, expected_exit",
     [
-        (-1, 10),   # below minimum → rejected
-        (0, 0),     # sentinel "use OCI minimum" → accepted
-        (1, 0),     # minimum explicit value → accepted
-        (30, 0),    # maximum explicit value → accepted
-        (31, 10),   # one above maximum → rejected
+        (-1, 10),  # below minimum → rejected
+        (0, 0),  # sentinel "use OCI minimum" → accepted
+        (1, 0),  # minimum explicit value → accepted
+        (30, 0),  # maximum explicit value → accepted
+        (31, 10),  # one above maximum → rejected
         (365, 10),  # far above maximum → rejected
     ],
 )
-def test_delete_secret_days_boundary(mv, common, mock_oci, make_args, log, days, expected_exit):
+def test_delete_secret_days_boundary(
+    mv, common, mock_oci, make_args, log, days, expected_exit
+):
     """``--days`` values outside [1, 30] (or 0) must return exit code 10."""
     args = make_args(days=days, dry_run=True, yes=True)
     rc = mv.cmd_delete_secret(args, log)
-    assert rc == expected_exit, (
-        f"days={days}: expected exit {expected_exit}, got {rc}"
-    )
+    assert rc == expected_exit, f"days={days}: expected exit {expected_exit}, got {rc}"
 
 
 # ---------------------------------------------------------------------------

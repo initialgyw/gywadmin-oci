@@ -5,6 +5,7 @@ Set A: Log-line regression for MAJOR-2 — secret value must not appear in logs
 
 Set B: Removed subcommands are rejected with exit code 2.
 """
+
 from __future__ import annotations
 
 import argparse

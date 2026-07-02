@@ -2,6 +2,7 @@
 
 Argparse-only; no OCI mocking required.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -50,9 +51,7 @@ def test_update_secret_set_tags_parses(mv):
 
 def test_update_secret_set_tags_empty_string(mv):
     """--set-tags '' is allowed (means 'clear all tags')."""
-    args = mv.parse_args(
-        ["update-secret", "-n", "s", "--value", "v", "--set-tags", ""]
-    )
+    args = mv.parse_args(["update-secret", "-n", "s", "--value", "v", "--set-tags", ""])
     assert args.set_tags == ""
 
 
