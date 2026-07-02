@@ -5,6 +5,8 @@ installable Python distribution (`gywadmin-oci`).
 
 ## Install
 
+### Python Package
+
     # Install from the main branch (latest)
     pip install "git+https://github.com/initialgyw/gywadmin-oci.git@main"
 
@@ -17,6 +19,49 @@ For development:
 
 Installing the package places three console scripts on your `PATH`:
 `initialize-oci`, `manage-vault`, and `update-github-secrets`.
+
+### Docker
+
+A pre-built minimal Docker image is available via the GitHub Container Registry. This avoids installing Python or dependencies on your host.
+
+```bash
+# Pull a specific version (replace 0.1.1 with the desired version)
+docker pull ghcr.io/initialgyw/gywadmin-oci:0.1.1
+```
+
+#### Authentication
+
+Before running the container, you must have a valid OCI configuration and API key on your host machine. If you do not have one, you can generate it using the official OCI CLI Docker image:
+
+```bash
+# Generate a new config and key pair
+docker run -it --rm -v ~/.oci:/oracle/.oci ghcr.io/oracle/oci-cli:latest setup config
+
+# Or authenticate via browser session
+docker run -it --rm -v ~/.oci:/oracle/.oci ghcr.io/oracle/oci-cli:latest session authenticate --region <your-region>
+```
+
+This typically creates a `~/.oci/config` file and an associated RSA key pair on your host machine.
+
+#### Running the container
+
+When running the container, you must mount your OCI configuration directory (and GitHub configuration if using `update-github-secrets`) so the scripts can authenticate:
+
+```bash
+# Example: running initialize-oci
+docker run -it --rm \
+  -v ~/.oci:/root/.oci:ro \
+  ghcr.io/initialgyw/gywadmin-oci:0.1.1 \
+  initialize-oci --help
+
+# Example: running manage-vault
+docker run -it --rm \
+  -v ~/.oci:/root/.oci:ro \
+  ghcr.io/initialgyw/gywadmin-oci:0.1.1 \
+  manage-vault list-secrets
+```
+
+The image defaults to a standard Python shell, so you must specify which script to run as the command (`initialize-oci`, `manage-vault`, or `update-github-secrets`).
 
 ## Package layout
 
