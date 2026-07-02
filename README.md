@@ -5,7 +5,11 @@ installable Python distribution (`gywadmin-oci`).
 
 ## Install
 
-    pip install "git+https://github.com/initialgyw/gywadmin-oci.git@v0.1.0"
+    # Install from the main branch (latest)
+    pip install "git+https://github.com/initialgyw/gywadmin-oci.git@main"
+
+    # Or install a specific version tag (e.g., 0.1.0)
+    pip install "git+https://github.com/initialgyw/gywadmin-oci.git@0.1.0"
 
 For development:
 
@@ -51,7 +55,11 @@ account (with RSA-4096 API key) + group + membership + policy.
 Install the package (which pulls in `oci` and `cryptography`):
 
 ```
-pip install "git+https://github.com/initialgyw/gywadmin-oci.git@v0.1.0"
+# Install from the main branch (latest)
+pip install "git+https://github.com/initialgyw/gywadmin-oci.git@main"
+
+# Or install a specific version tag (e.g., 0.1.0)
+pip install "git+https://github.com/initialgyw/gywadmin-oci.git@0.1.0"
 ```
 
 This pulls in `oci` (the SDK) and `cryptography` (for the RSA key
@@ -212,7 +220,11 @@ first (or have a vault and at least one MEK in place by some other means).
 ## Install
 
 ```
-pip install "git+https://github.com/initialgyw/gywadmin-oci.git@v0.1.0"
+# Install from the main branch (latest)
+pip install "git+https://github.com/initialgyw/gywadmin-oci.git@main"
+
+# Or install a specific version tag (e.g., 0.1.0)
+pip install "git+https://github.com/initialgyw/gywadmin-oci.git@0.1.0"
 ```
 
 `--help` works without the optional deps installed.
