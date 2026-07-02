@@ -1,4 +1,5 @@
 """Shared fixtures for the gywadmin_oci vault tests."""
+
 from __future__ import annotations
 
 import argparse
@@ -76,7 +77,9 @@ def mock_oci(monkeypatch, common):
 
     monkeypatch.setattr(common, "require_dependencies", _stub_require_dependencies)
     monkeypatch.setattr(common, "load_oci_config", _stub_load_oci_config)
-    monkeypatch.setattr(common, "verify_oci_authenticated", _stub_verify_oci_authenticated)
+    monkeypatch.setattr(
+        common, "verify_oci_authenticated", _stub_verify_oci_authenticated
+    )
     monkeypatch.setattr(common, "lookup_compartment", _stub_lookup_compartment)
     monkeypatch.setattr(common, "lookup_vault", _stub_lookup_vault)
     monkeypatch.setattr(common, "list_all", _stub_list_all)
@@ -132,7 +135,9 @@ def mock_oci(monkeypatch, common):
             """Never called; common.lookup_compartment is stubbed above."""
 
     monkeypatch.setattr(oci.identity, "IdentityClient", _MockClient, raising=False)
-    monkeypatch.setattr(oci.key_management, "KmsVaultClient", _MockClient, raising=False)
+    monkeypatch.setattr(
+        oci.key_management, "KmsVaultClient", _MockClient, raising=False
+    )
     monkeypatch.setattr(oci.vault, "VaultsClient", _MockClient, raising=False)
 
     # Spy on prompt_destructive_confirm so tests can detect whether it was called.

@@ -4,10 +4,10 @@ Covers ``_parse_tags_kv``, ``_parse_tag_keys``, and ``_resolve_tag_mutation``.
 These helpers are pure-Python and have no OCI dependency, so the tests do
 not need any mock fixtures.
 """
+
 from __future__ import annotations
 
 import argparse
-import logging
 
 import pytest
 

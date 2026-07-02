@@ -477,9 +477,7 @@ def _parse_tags_kv(value: Optional[str], log: logging.Logger) -> Dict[str, str]:
             log.error("Tag input contains an empty pair: %r", value)
             raise SystemExit(10)
         if "=" not in pair:
-            log.error(
-                "Tag pair %r is missing '=' (expected KEY=VALUE).", pair
-            )
+            log.error("Tag pair %r is missing '=' (expected KEY=VALUE).", pair)
             raise SystemExit(10)
         # Reject more than one '=' (no escaping supported).
         if pair.count("=") > 1:
@@ -587,7 +585,9 @@ def _resolve_tag_mutation(
 # ---------------------------------------------------------------------------
 # add-secret helpers (preserved from manage-vault-secrets.py)
 # ---------------------------------------------------------------------------
-def _load_secret_value(args: argparse.Namespace, log: logging.Logger) -> Tuple[bytes, str]:
+def _load_secret_value(
+    args: argparse.Namespace, log: logging.Logger
+) -> Tuple[bytes, str]:
     """Resolve ``--secret-value`` into raw bytes plus a source label.
 
     Resolution order:
@@ -1005,7 +1005,9 @@ def cmd_add_secret(args: argparse.Namespace, log: logging.Logger) -> int:
     # Parse freeform tags (also pre-import for clean error reporting).
     freeform_tags = _parse_tags_kv(getattr(args, "tags", None), log)
     if freeform_tags:
-        log.info("Will attach %d freeform tag(s): %s", len(freeform_tags), freeform_tags)
+        log.info(
+            "Will attach %d freeform tag(s): %s", len(freeform_tags), freeform_tags
+        )
 
     common.require_dependencies(log, need_cryptography=False)
 
@@ -1059,7 +1061,9 @@ def cmd_add_secret(args: argparse.Namespace, log: logging.Logger) -> int:
             vault_id=vault_ocid,
         )
         live_count = sum(
-            1 for s in all_secrets if s.lifecycle_state not in common.DELETION_LIFECYCLE_STATES
+            1
+            for s in all_secrets
+            if s.lifecycle_state not in common.DELETION_LIFECYCLE_STATES
         )
         if live_count >= common.MAX_SECRETS_ALWAYS_FREE:
             log.error(
@@ -1849,8 +1853,7 @@ def cmd_delete_secret(args: argparse.Namespace, log: logging.Logger) -> int:
             # Allow 1-minute slack on the lower bound to absorb wall-clock skew.
             if tod < min_allowed - timedelta(minutes=1) or tod > max_allowed:
                 log.error(
-                    "--time-of-deletion %s is outside the allowed window "
-                    "(%s to %s).",
+                    "--time-of-deletion %s is outside the allowed window (%s to %s).",
                     args.time_of_deletion,
                     common.format_oci_time(min_allowed),
                     common.format_oci_time(max_allowed),
@@ -1958,7 +1961,9 @@ def cmd_list_secrets(args: argparse.Namespace, log: logging.Logger) -> int:
         args.dry_run,
     )
     if args.dry_run:
-        log.info("--dry-run is a no-op for list-secrets; proceeding with read-only listing.")
+        log.info(
+            "--dry-run is a no-op for list-secrets; proceeding with read-only listing."
+        )
 
     common.require_dependencies(log, need_cryptography=False)
 

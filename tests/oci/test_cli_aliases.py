@@ -4,6 +4,7 @@ These tests exercise the argument-parser only; no OCI mocking is required.
 Each test function contains a single logical assertion so failures are
 immediately pinpointed.
 """
+
 from __future__ import annotations
 
 

@@ -5,6 +5,7 @@ The Versions column was removed, and per-secret get_secret /
 list_secret_versions calls were eliminated; rows are built directly from
 list_secrets summaries.
 """
+
 import json
 import pytest
 from unittest.mock import MagicMock
@@ -35,14 +36,20 @@ def test_list_secrets_rows(mv, common, log, monkeypatch):
         return s
 
     summaries = [
-        make_summary("b-secret", "ACTIVE",
-                     freeform_tags={"env": "prod"},
-                     defined_tags={"ns": {"k": "v"}},
-                     system_tags={}),
-        make_summary("a-secret", "PENDING_DELETION",
-                     freeform_tags=None,
-                     defined_tags=None,
-                     system_tags=None),
+        make_summary(
+            "b-secret",
+            "ACTIVE",
+            freeform_tags={"env": "prod"},
+            defined_tags={"ns": {"k": "v"}},
+            system_tags={},
+        ),
+        make_summary(
+            "a-secret",
+            "PENDING_DELETION",
+            freeform_tags=None,
+            defined_tags=None,
+            system_tags=None,
+        ),
     ]
 
     def mock_list_all(func, **kwargs):
@@ -186,8 +193,12 @@ def test_cmd_list_secrets_empty(mv, mock_oci, make_args, log, monkeypatch):
 
     monkeypatch.setattr(mv.common, "list_all", mock_list_all)
 
-    args = make_args(subcommand="list-secrets", name_prefix=None,
-                     output_format="table", dry_run=False)
+    args = make_args(
+        subcommand="list-secrets",
+        name_prefix=None,
+        output_format="table",
+        dry_run=False,
+    )
     rc = mv.cmd_list_secrets(args, log)
     assert rc == 0
 
@@ -213,8 +224,9 @@ def test_cmd_list_secrets_dry_run(mv, mock_oci, make_args, log, monkeypatch):
 
     monkeypatch.setattr(mv.common, "list_all", mock_list_all)
 
-    args = make_args(subcommand="list-secrets", name_prefix=None,
-                     output_format="table", dry_run=True)
+    args = make_args(
+        subcommand="list-secrets", name_prefix=None, output_format="table", dry_run=True
+    )
     rc = mv.cmd_list_secrets(args, log)
     assert rc == 0
     assert called is True  # dry-run still calls API (read-only)
@@ -233,12 +245,18 @@ def test_cmd_list_secrets_service_error(mv, mock_oci, make_args, log, monkeypatc
     monkeypatch.setattr(oci.vault, "VaultsClient", _FakeVaultsClient, raising=False)
 
     def mock_list_all(func, **kwargs):
-        raise mv.ServiceError(status=500, code="InternalError", message="Boom", headers={})
+        raise mv.ServiceError(
+            status=500, code="InternalError", message="Boom", headers={}
+        )
 
     monkeypatch.setattr(mv.common, "list_all", mock_list_all)
 
-    args = make_args(subcommand="list-secrets", name_prefix=None,
-                     output_format="table", dry_run=False)
+    args = make_args(
+        subcommand="list-secrets",
+        name_prefix=None,
+        output_format="table",
+        dry_run=False,
+    )
     rc = mv.cmd_list_secrets(args, log)
     assert rc == 1
 
@@ -249,8 +267,12 @@ def test_cmd_list_secrets_not_found(mv, mock_oci, make_args, log, monkeypatch):
 
     monkeypatch.setattr(mv.common, "lookup_compartment", mock_lookup_compartment)
 
-    args = make_args(subcommand="list-secrets", name_prefix=None,
-                     output_format="table", dry_run=False)
+    args = make_args(
+        subcommand="list-secrets",
+        name_prefix=None,
+        output_format="table",
+        dry_run=False,
+    )
     with pytest.raises(SystemExit) as exc:
         mv.cmd_list_secrets(args, log)
     assert exc.value.code == 5

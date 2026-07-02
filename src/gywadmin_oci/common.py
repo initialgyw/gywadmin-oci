@@ -290,7 +290,9 @@ def load_oci_config(
     try:
         config = oci.config.from_file(str(config_path), profile_name=profile)
     except Exception as exc:  # pragma: no cover - oci raises various errors
-        log.error("Failed to load OCI config from %s [%s]: %s", config_path, profile, exc)
+        log.error(
+            "Failed to load OCI config from %s [%s]: %s", config_path, profile, exc
+        )
         raise SystemExit(3) from exc
 
     if region_override:
@@ -432,7 +434,10 @@ def wait_for_state(
                 raise
             now = time.monotonic()
             transient_label = f"<status={status}>"
-            if last_state != transient_label or (now - last_log_time) >= heartbeat_interval:
+            if (
+                last_state != transient_label
+                or (now - last_log_time) >= heartbeat_interval
+            ):
                 elapsed = int(now - started)
                 log.info(
                     "%s not yet visible (status=%s code=%s, elapsed=%ds); retrying...",
@@ -454,7 +459,12 @@ def wait_for_state(
         now = time.monotonic()
         if state != last_state or (now - last_log_time) >= heartbeat_interval:
             elapsed = int(now - started)
-            log.info("%s lifecycle_state=%s (elapsed=%ds)", label, state or "<unknown>", elapsed)
+            log.info(
+                "%s lifecycle_state=%s (elapsed=%ds)",
+                label,
+                state or "<unknown>",
+                elapsed,
+            )
             last_state = state
             last_log_time = now
         if state in target_set:
@@ -896,7 +906,9 @@ def auto_pick_mek(
         SystemExit: With code ``6`` if zero or more than one ENABLED key is
             present in the vault.
     """
-    mgmt = oci.key_management.KmsManagementClient(config, service_endpoint=management_endpoint)
+    mgmt = oci.key_management.KmsManagementClient(
+        config, service_endpoint=management_endpoint
+    )
     enabled = [
         k
         for k in list_all(mgmt.list_keys, compartment_id=compartment_ocid)
@@ -994,6 +1006,3 @@ def lookup_existing_secret(
         fallback.lifecycle_state,
     )
     return vaults_client.get_secret(fallback.id).data
-
-
-
