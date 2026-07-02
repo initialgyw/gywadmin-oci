@@ -1,4 +1,3 @@
-import argparse
 import pytest
 
 def test_list_secrets_no_args(mv):

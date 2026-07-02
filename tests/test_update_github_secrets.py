@@ -1,18 +1,15 @@
 import json
 import logging
 import os
-import stat
 import subprocess
 import sys
 from dataclasses import FrozenInstanceError
 from pathlib import Path
-from typing import Any, Dict
 
 import pytest
 
 from gywadmin_oci.update_github_secrets import (
     GitHubSecrets,
-    default_runner,
     load_summary,
     main,
     preflight_gh,
