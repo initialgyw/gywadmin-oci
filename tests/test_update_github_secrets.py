@@ -401,14 +401,14 @@ class TestMain:
 
     def test_main_dry_run_returns_0(self, summary_file, monkeypatch):
         runner = MultiRunner([])
-        import update_github_secrets
+        from gywadmin_oci import update_github_secrets
         monkeypatch.setattr(update_github_secrets, "default_runner", runner)
         res = main(["--repo", "o/r", "-f", str(summary_file), "--dry-run"])
         assert res == 0
         assert len(runner.calls) == 0
 
     def test_main_propagates_exit_code_from_process_secrets(self, monkeypatch):
-        import update_github_secrets
+        from gywadmin_oci import update_github_secrets
         monkeypatch.setattr(update_github_secrets, "process_secrets", lambda *args, **kwargs: 1)
         res = main(["--repo", "o/r", "-f", "/tmp/x.json"])
         assert res == 1
