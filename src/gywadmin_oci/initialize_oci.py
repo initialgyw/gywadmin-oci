@@ -1179,13 +1179,13 @@ def ensure_customer_secret_key(
                 len(existing),
                 sa_name,
             )
-        return {
-            "access_key": "dryrun",
-            "secret_key": "dryrun",
-            "credentials_file": str(aws_path),
-            "display_name": display_name,
-            "new": True,
-        }
+            return {
+                "access_key": "dryrun",
+                "secret_key": "dryrun",
+                "credentials_file": str(aws_path),
+                "display_name": display_name,
+                "new": True,
+            }
         for key in existing:
             log.info(
                 "Deleting Customer Secret Key %s (display_name=%s)",
