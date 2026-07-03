@@ -18,8 +18,8 @@ OCI-side automation for `gywadmin-homelab`, packaged as a standalone, installabl
       - [list-secrets](#list-secrets)
       - [add-secret](#add-secret)
       - [delete-secret](#delete-secret)
-  - [update-github-secrets](#update-github-secrets)
-    - [Usage](#usage)
+    - [update-github-secrets](#update-github-secrets)
+      - [Usage](#usage)
 - [Development](#development)
 - [Exit codes](#exit-codes)
 
@@ -115,7 +115,7 @@ total 40
 - **IAM group** (`grp_automation`) — with `sa_automation` added as a member.
 - **IAM policy** (`policy_grp_automation`) — at the tenancy root, with:
   - `Allow group <grp> to manage objects in compartment <cpm> where target.bucket.name='<bucket>'`
-  - `Allow group <grp> to read secret-bundles in compartment <cpm>`
+  - `Allow group <grp> to manage secret-family in compartment <cpm>`
   - `Allow group <grp> to read vaults in compartment <cpm>`
 
 Every resource is tagged `created_by=initialize-oci.py` (configurable via `--tag-key` / `--tag-value`).
@@ -178,7 +178,7 @@ EOF
 % manage-vault delete-secret -n pi_root_password --days 7
 ```
 
-### update-github-secrets
+#### update-github-secrets
 
 **Note:** You must pass your GitHub token to the container as an environment variable using `-e GH_TOKEN=<your_token>`.
 
@@ -191,7 +191,7 @@ OR auth and pass in the config to the container:
   gh auth login
 ```
 
-#### Usage
+##### Usage
 
 Dry run (no GitHub calls, no confirmation required):
 
