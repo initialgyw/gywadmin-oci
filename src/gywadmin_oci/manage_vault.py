@@ -1019,9 +1019,9 @@ def cmd_add_secret(args: argparse.Namespace, log: logging.Logger) -> int:
     )
     tenancy_ocid = common.verify_oci_authenticated(config, log, level=logging.DEBUG)
 
-    identity_client = oci.identity.IdentityClient(config)
-    kms_vault_client = oci.key_management.KmsVaultClient(config)
-    vaults_client = oci.vault.VaultsClient(config)
+    identity_client = common.make_client(oci.identity.IdentityClient, config)
+    kms_vault_client = common.make_client(oci.key_management.KmsVaultClient, config)
+    vaults_client = common.make_client(oci.vault.VaultsClient, config)
 
     try:
         compartment_ocid = common.lookup_compartment(
@@ -1353,9 +1353,9 @@ def cmd_update_secret(args: argparse.Namespace, log: logging.Logger) -> int:
     )
     tenancy_ocid = common.verify_oci_authenticated(config, log, level=logging.DEBUG)
 
-    identity_client = oci.identity.IdentityClient(config)
-    kms_vault_client = oci.key_management.KmsVaultClient(config)
-    vaults_client = oci.vault.VaultsClient(config)
+    identity_client = common.make_client(oci.identity.IdentityClient, config)
+    kms_vault_client = common.make_client(oci.key_management.KmsVaultClient, config)
+    vaults_client = common.make_client(oci.vault.VaultsClient, config)
 
     cleanup_failed = False
 
@@ -1633,9 +1633,9 @@ def cmd_get_secret(args: argparse.Namespace, log: logging.Logger) -> int:
     )
     tenancy_ocid = common.verify_oci_authenticated(config, log, level=logging.DEBUG)
 
-    identity_client = oci.identity.IdentityClient(config)
-    kms_vault_client = oci.key_management.KmsVaultClient(config)
-    vaults_client = oci.vault.VaultsClient(config)
+    identity_client = common.make_client(oci.identity.IdentityClient, config)
+    kms_vault_client = common.make_client(oci.key_management.KmsVaultClient, config)
+    vaults_client = common.make_client(oci.vault.VaultsClient, config)
 
     try:
         compartment_ocid = common.lookup_compartment(
@@ -1679,7 +1679,7 @@ def cmd_get_secret(args: argparse.Namespace, log: logging.Logger) -> int:
             args.output_format,
         )
 
-        secrets_client = oci.secrets.SecretsClient(config)
+        secrets_client = common.make_client(oci.secrets.SecretsClient, config)
         try:
             bundle = secrets_client.get_secret_bundle(
                 secret_id=existing.id, stage="LATEST"
@@ -1789,9 +1789,9 @@ def cmd_delete_secret(args: argparse.Namespace, log: logging.Logger) -> int:
     )
     tenancy_ocid = common.verify_oci_authenticated(config, log, level=logging.DEBUG)
 
-    identity_client = oci.identity.IdentityClient(config)
-    kms_vault_client = oci.key_management.KmsVaultClient(config)
-    vaults_client = oci.vault.VaultsClient(config)
+    identity_client = common.make_client(oci.identity.IdentityClient, config)
+    kms_vault_client = common.make_client(oci.key_management.KmsVaultClient, config)
+    vaults_client = common.make_client(oci.vault.VaultsClient, config)
 
     try:
         compartment_ocid = common.lookup_compartment(
@@ -1975,9 +1975,9 @@ def cmd_list_secrets(args: argparse.Namespace, log: logging.Logger) -> int:
     )
     tenancy_ocid = common.verify_oci_authenticated(config, log, level=logging.DEBUG)
 
-    identity_client = oci.identity.IdentityClient(config)
-    kms_vault_client = oci.key_management.KmsVaultClient(config)
-    vaults_client = oci.vault.VaultsClient(config)
+    identity_client = common.make_client(oci.identity.IdentityClient, config)
+    kms_vault_client = common.make_client(oci.key_management.KmsVaultClient, config)
+    vaults_client = common.make_client(oci.vault.VaultsClient, config)
 
     try:
         compartment_ocid = common.lookup_compartment(

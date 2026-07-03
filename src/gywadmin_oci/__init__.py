@@ -23,6 +23,7 @@ from gywadmin_oci.common import (
     ServiceError,
     atomic_write,
     auto_pick_mek,
+    build_signer,
     dry_run_ocid,
     format_oci_time,
     is_dry_run_ocid,
@@ -32,6 +33,7 @@ from gywadmin_oci.common import (
     lookup_compartment,
     lookup_existing_secret,
     lookup_vault,
+    make_client,
     now_utc,
     oci,
     parse_oci_time,
@@ -44,7 +46,7 @@ from gywadmin_oci.common import (
     wait_for_state,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "__version__",
@@ -52,6 +54,8 @@ __all__ = [
     "setup_logging",
     "require_dependencies",
     "load_oci_config",
+    "build_signer",
+    "make_client",
     "verify_oci_authenticated",
     "wait_for_state",
     "list_all",

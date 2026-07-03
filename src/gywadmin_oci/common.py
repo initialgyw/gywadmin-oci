@@ -11,9 +11,15 @@ Public surface
   a ``-v`` count value.
 * :func:`require_dependencies` — abort if optional third-party deps
   (``oci``, optionally ``cryptography``) are missing.
-* :func:`load_oci_config` — load and validate an OCI CLI config profile.
-* :func:`verify_oci_authenticated` — live ``get_user`` preflight; returns
-  the tenancy OCID.
+* :func:`load_oci_config` — load and validate an OCI CLI config profile
+  (API-key **or** session-token).
+* :func:`build_signer` — return a ``SecurityTokenSigner`` for session-token
+  configs, or ``None`` for classic API-key configs.
+* :func:`make_client` — construct an OCI service client, attaching a
+  session-token signer automatically when one is required.
+* :func:`verify_oci_authenticated` — live preflight; ``get_user`` for API-key
+  configs, ``list_region_subscriptions`` for session tokens. Returns the
+  tenancy OCID.
 * :func:`wait_for_state` — 404/5xx-tolerant polling helper.
 * :func:`list_all` — pagination helper around ``oci.pagination``.
 * :func:`set_secure_perms` — best-effort POSIX permission helper.
@@ -147,7 +153,7 @@ MAX_ACTIVE_VERSIONS_ALWAYS_FREE: int = 20
 MAX_PENDING_VERSIONS_ALWAYS_FREE: int = 20
 
 # Default path for the summary JSON produced by ``initialize-oci.py``.
-DEFAULT_SUMMARY_PATH = Path("script_outputs/initialize-oci-summary.json")
+DEFAULT_SUMMARY_PATH = Path("output/initialize-oci-summary.json")
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +265,73 @@ def require_dependencies(
         raise SystemExit(2)
 
 
+def build_signer(config: Dict[str, Any]) -> Optional[Any]:
+    """Return a session-token signer for *config*, or ``None`` for API keys.
+
+    ``oci session authenticate`` produces a config that carries a
+    ``security_token_file`` entry and **no** ``user`` OCID. Such configs must
+    be used with an :class:`oci.auth.signers.SecurityTokenSigner` rather than
+    the SDK's default API-key signer. Classic API-key configs (no
+    ``security_token_file``) return ``None`` so callers fall back to the
+    default behaviour.
+
+    Args:
+        config: OCI config dict from :func:`load_oci_config` or
+            ``oci.config.from_file``.
+
+    Returns:
+        A ``SecurityTokenSigner`` when ``config`` uses session-token auth,
+        else ``None``.
+
+    Raises:
+        OSError: If the token file cannot be read.
+        Exception: Propagates errors from private-key loading (e.g. missing
+            key file, wrong passphrase).
+    """
+    token_path = config.get("security_token_file")
+    if not token_path:
+        return None
+
+    with open(token_path, encoding="utf-8") as fh:
+        token = fh.read().strip()
+
+    private_key = oci.signer.load_private_key_from_file(
+        config["key_file"], pass_phrase=config.get("pass_phrase")
+    )
+    return oci.auth.signers.SecurityTokenSigner(token, private_key)
+
+
+def make_client(
+    client_cls: Callable[..., Any],
+    config: Dict[str, Any],
+    *,
+    service_endpoint: Optional[str] = None,
+) -> Any:
+    """Construct an OCI service client with the correct authentication signer.
+
+    For classic API-key configs this is equivalent to ``client_cls(config)``.
+    For session-token configs (see :func:`build_signer`) it attaches a
+    ``SecurityTokenSigner`` so requests are authenticated with the session
+    token instead of a (nonexistent) API key.
+
+    Args:
+        client_cls: An OCI client class, e.g. ``oci.identity.IdentityClient``.
+        config: Validated OCI config dict.
+        service_endpoint: Optional explicit service endpoint (required by the
+            KMS management-plane client).
+
+    Returns:
+        An instantiated OCI service client.
+    """
+    kwargs: Dict[str, Any] = {}
+    if service_endpoint is not None:
+        kwargs["service_endpoint"] = service_endpoint
+    signer = build_signer(config)
+    if signer is not None:
+        kwargs["signer"] = signer
+    return client_cls(config, **kwargs)
+
+
 def load_oci_config(
     config_path: Path,
     profile: str,
@@ -266,6 +339,11 @@ def load_oci_config(
     log: logging.Logger,
 ) -> Dict[str, Any]:
     """Load and validate an OCI CLI config profile.
+
+    Supports both classic API-key configs and session-token configs produced
+    by ``oci session authenticate``. Session-token configs omit the ``user``
+    OCID (identity is carried by the token), so validation is delegated to the
+    SDK with the session signer attached, which skips the API-key-only checks.
 
     Args:
         config_path: Filesystem path to the OCI CLI config file.
@@ -304,7 +382,26 @@ def load_oci_config(
         config["region"] = region_override
 
     try:
-        oci.config.validate_config(config)
+        signer = build_signer(config)
+    except Exception as exc:
+        log.error(
+            "Failed to load session token or key file referenced by %s [%s]: %s. "
+            "Ensure the key_file and security_token_file paths in the config are "
+            "readable inside the container (e.g. mount to /root/.oci).",
+            config_path,
+            profile,
+            exc,
+        )
+        raise SystemExit(3) from exc
+
+    try:
+        if signer is not None:
+            # Session-token config: validate_config skips the API-key-only
+            # 'user'/'fingerprint' checks when a SecurityTokenSigner is passed.
+            log.debug("Detected session-token config; validating with token signer.")
+            oci.config.validate_config(config, signer=signer)
+        else:
+            oci.config.validate_config(config)
     except Exception as exc:  # pragma: no cover - depends on user config
         log.error("OCI config did not validate: %s", exc)
         raise SystemExit(3) from exc
@@ -320,8 +417,15 @@ def verify_oci_authenticated(
 ) -> str:
     """Verify the loaded OCI config can actually call the API.
 
-    Performs a lightweight ``get_user`` against the configured user OCID to
-    detect things like expired keys, mistyped fingerprints, or revoked users.
+    Two authentication styles are supported:
+
+    * **API-key** configs: performs a lightweight ``get_user`` against the
+      configured ``user`` OCID to detect expired keys, mistyped fingerprints,
+      or revoked users.
+    * **Session-token** configs (``oci session authenticate``): there is no
+      ``user`` OCID to look up, so authentication is verified with
+      ``list_region_subscriptions`` against the tenancy. This exercises the
+      session-token signer and fails fast on an expired token.
 
     Args:
         config: OCI config dict from :func:`load_oci_config`.
@@ -335,9 +439,40 @@ def verify_oci_authenticated(
     Raises:
         SystemExit: With code ``4`` if the API call fails.
     """
-    identity = oci.identity.IdentityClient(config)
-    user_ocid = config.get("user")
+    identity = make_client(oci.identity.IdentityClient, config)
     tenancy_ocid = config.get("tenancy")
+
+    if config.get("security_token_file"):
+        # Session-token principal: no 'user' OCID exists. Prove the signer
+        # works (and the token is unexpired) by listing region subscriptions.
+        if not tenancy_ocid:
+            log.error("OCI config is missing the 'tenancy' field.")
+            raise SystemExit(4)
+        try:
+            identity.list_region_subscriptions(tenancy_ocid)
+        except ServiceError as exc:
+            log.error(
+                "OCI session-token authentication test failed (status=%s code=%s): "
+                "%s. The session token may be expired; re-run "
+                "`oci session authenticate`.",
+                getattr(exc, "status", "?"),
+                getattr(exc, "code", "?"),
+                getattr(exc, "message", str(exc)),
+            )
+            raise SystemExit(4) from exc
+        except Exception as exc:  # pragma: no cover - network etc.
+            log.error("OCI session-token authentication test failed: %s", exc)
+            raise SystemExit(4) from exc
+
+        log.log(
+            level,
+            "Authenticated via session token in tenancy %s, region %s",
+            tenancy_ocid,
+            config.get("region"),
+        )
+        return tenancy_ocid
+
+    user_ocid = config.get("user")
     if not user_ocid or not tenancy_ocid:
         log.error("OCI config is missing 'user' or 'tenancy' fields.")
         raise SystemExit(4)
@@ -906,8 +1041,10 @@ def auto_pick_mek(
         SystemExit: With code ``6`` if zero or more than one ENABLED key is
             present in the vault.
     """
-    mgmt = oci.key_management.KmsManagementClient(
-        config, service_endpoint=management_endpoint
+    mgmt = make_client(
+        oci.key_management.KmsManagementClient,
+        config,
+        service_endpoint=management_endpoint,
     )
     enabled = [
         k

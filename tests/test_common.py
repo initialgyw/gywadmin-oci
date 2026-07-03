@@ -149,5 +149,5 @@ class TestAtomicWrite:
 class TestModuleConstants:
     def test_default_summary_path_constant(self):
         assert DEFAULT_SUMMARY_PATH == Path(
-            "script_outputs/initialize-oci-summary.json"
+            "output/initialize-oci-summary.json"
         )
