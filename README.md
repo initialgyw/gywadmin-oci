@@ -1,24 +1,32 @@
 # gywadmin-oci
 
-OCI-side automation for `gywadmin-homelab`, packaged as a standalone,
-installable Python distribution (`gywadmin-oci`).
+OCI-side automation for `gywadmin-homelab`, packaged as a standalone, installable Python distribution (`gywadmin-oci`).
+
+## Package layout
+
+| Component | Purpose |
+|---|---|
+| [`initialize-oci`](#initialize-oci) (console script → `gywadmin_oci.initialize_oci:main`) | One-shot provisioner for the OCI Always Free Tier baseline (compartment, bucket, vault, MEK, IAM service account, group, policy). |
+| [`manage-vault`](#manage-vault) (console script → `gywadmin_oci.manage_vault:main`) | Multi-subcommand CLI for day-2 secret operations: `add-secret`, `delete-secret`, `list-secrets`. |
+| [`update-github-secrets`](#update-github-secrets) (console script → `gywadmin_oci.update_github_secrets:main`) | Synchronizes the output from `initialize-oci` into GitHub Actions repository secrets using the `gh` CLI. |
+| `gywadmin_oci.common` | Shared helpers (logging, dependency check, OCI config loader, lifecycle-state poller, dry-run sentinels, freeform-tag merge, resource lookups, time helpers, confirmation gate, summary data model). Imported by all entry points; not run directly. |
 
 ## Install
 
-### Python Package
+### Install from the main branch (latest)
 
-    # Install from the main branch (latest)
-    pip install "git+https://github.com/initialgyw/gywadmin-oci.git@main"
+```
+pip install "git+https://github.com/initialgyw/gywadmin-oci.git@main"
 
-    # Or install a specific version tag (e.g., 0.1.0)
-    pip install "git+https://github.com/initialgyw/gywadmin-oci.git@0.1.0"
+# Or install a specific version tag (e.g., 0.1.0)
+pip install "git+https://github.com/initialgyw/gywadmin-oci.git@0.1.0"
+```
 
 For development:
 
-    pip install -e . -r py-requirements-dev.txt
-
-Installing the package places three console scripts on your `PATH`:
-`initialize-oci`, `manage-vault`, and `update-github-secrets`.
+```
+pip install -e . -r py-requirements-dev.txt
+```
 
 ### Docker
 
@@ -29,21 +37,23 @@ A pre-built minimal Docker image is available via the GitHub Container Registry.
 docker pull ghcr.io/initialgyw/gywadmin-oci:0.1.1
 ```
 
-#### Authentication
+## General Usage & Configuration
+
+### Authentication
 
 Before running the container, you must have a valid OCI configuration and API key on your host machine. If you do not have one, you can generate it using the official OCI CLI Docker image:
 
 ```bash
 # Generate a new config and key pair
-docker run -it --rm -v ~/.oci:/oracle/.oci ghcr.io/oracle/oci-cli:latest setup config
+docker run -it --rm -v ~/.oci:/root/.oci ghcr.io/initialgyw/gywadmin-oci:0.1.1 oci setup config
 
 # Or authenticate via browser session
-docker run -it --rm -v ~/.oci:/oracle/.oci ghcr.io/oracle/oci-cli:latest session authenticate --region <your-region>
+docker run -it --rm -v ~/.oci:/root/.oci ghcr.io/initialgyw/gywadmin-oci:0.1.1 session authenticate --region <your-region>
 ```
 
 This typically creates a `~/.oci/config` file and an associated RSA key pair on your host machine.
 
-#### Running the container
+### Running the container
 
 When running the container, you must mount your OCI configuration directory (and GitHub configuration if using `update-github-secrets`) so the scripts can authenticate:
 
@@ -63,55 +73,24 @@ docker run -it --rm \
 
 The image defaults to a standard Python shell, so you must specify which script to run as the command (`initialize-oci`, `manage-vault`, or `update-github-secrets`).
 
-## Package layout
+### Verbosity
 
-| Component | Purpose |
-|---|---|
-| [`initialize-oci`](#initialize-oci) (console script → `gywadmin_oci.initialize_oci:main`) | One-shot provisioner for the OCI Always Free Tier baseline (compartment, bucket, vault, MEK, IAM service account, group, policy). |
-| [`manage-vault`](#manage-vault) (console script → `gywadmin_oci.manage_vault:main`) | Multi-subcommand CLI for day-2 secret operations: `add-secret`, `delete-secret`, `list-secrets`. |
-| [`update-github-secrets`](#update-github-secrets) (console script → `gywadmin_oci.update_github_secrets:main`) | Synchronizes the output from `initialize-oci` into GitHub Actions repository secrets using the `gh` CLI. |
-| `gywadmin_oci.common` | Shared helpers (logging, dependency check, OCI config loader, lifecycle-state poller, dry-run sentinels, freeform-tag merge, resource lookups, time helpers, confirmation gate, summary data model). Imported by all entry points; not run directly. |
+| Flag | Root level | `urllib3` / `oci.circuit_breaker` / `oci.config` |
+|---|---|---|
+| (none) | WARNING | WARNING |
+| `-v` | INFO | WARNING |
+| `-vv` | DEBUG | INFO |
+| `-vvv` | DEBUG | DEBUG (full HTTP trace) |
 
 ---
 
-# initialize-oci
+## Tools & Commands
 
-Idempotent provisioner for the OCI Always Free Tier baseline used by
-`gywadmin-homelab`: compartment + bucket + vault + MEK + IAM service
-account (with RSA-4096 API key) + group + membership + policy.
+### initialize-oci
 
-> **Note:** the helper functions formerly defined inside this script
-> (`setup_logging`, `_wait_for_state`, `load_oci_config`, etc.) now live in
-> `gywadmin_oci.common` and are imported. Behaviour is unchanged.
+Idempotent provisioner for the OCI Always Free Tier baseline used by `gywadmin-homelab`: compartment + bucket + vault + MEK + IAM service account (with RSA-4096 API key) + group + membership + policy.
 
-## Prerequisites
-
-- Python 3.9 or newer.
-- An OCI tenancy where you have administrator authority (the script runs
-  IAM creates at the tenancy root).
-- An OCI CLI configuration file at `~/.oci/config`. If you don't have one
-  yet:
-  ```
-  oci setup config
-  ```
-
-## Install
-
-Install the package (which pulls in `oci` and `cryptography`):
-
-```
-# Install from the main branch (latest)
-pip install "git+https://github.com/initialgyw/gywadmin-oci.git@main"
-
-# Or install a specific version tag (e.g., 0.1.0)
-pip install "git+https://github.com/initialgyw/gywadmin-oci.git@0.1.0"
-```
-
-This pulls in `oci` (the SDK) and `cryptography` (for the RSA key
-material). `--help` works without these installed; everything else
-requires them.
-
-## Usage
+#### Usage
 
 Show the full flag set:
 
@@ -134,7 +113,7 @@ initialize-oci -v
 The script is idempotent — re-running with the same arguments reuses
 existing resources rather than creating duplicates.
 
-### Common flag overrides
+#### Common flag overrides
 
 | Flag | Default | Purpose |
 |---|---|---|
@@ -151,18 +130,7 @@ existing resources rather than creating duplicates.
 | `--oci-config-file` / `--oci-profile` | `~/.oci/config` / `DEFAULT` | Auth source. |
 | `--wait-seconds` / `--interval-seconds` | `1800` / `30` | Polling ceiling and cadence. |
 
-## Verbosity
-
-Use `-v` count flags (default is WARNING-only):
-
-| Flag | Root level | `urllib3` / `oci.circuit_breaker` / `oci.config` |
-|---|---|---|
-| (none) | WARNING | WARNING |
-| `-v` | INFO | WARNING |
-| `-vv` | DEBUG | INFO (HTTP/SDK noise muted) |
-| `-vvv` | DEBUG | DEBUG (full HTTP trace) |
-
-## Output artifacts
+#### Output artifacts
 
 Written to `--output-dir` (default `./output`, directory mode `0o700`):
 
@@ -177,7 +145,17 @@ Written to `--output-dir` (default `./output`, directory mode `0o700`):
 Treat everything in this directory as a secret. Add `output/` to
 `.gitignore`.
 
-## Resources provisioned
+##### Mount output on docker
+
+```
+docker run -it --rm \
+  -v ~/.oci:/root/.oci:ro \
+  -v <local_path>:/output \
+  ghcr.io/initialgyw/gywadmin-oci:0.1.1 \
+  initialize-oci --output-dir /output ...
+```
+
+#### Resources provisioned
 
 - **Compartment** (`cpm_automation`) — at the tenancy root.
 - **Object Storage bucket** (`bucket_automation`) — versioning enabled,
@@ -197,84 +175,28 @@ Treat everything in this directory as a secret. Add `output/` to
 Every resource is tagged `created_by=initialize-oci.py` (configurable via
 `--tag-key` / `--tag-value`).
 
-## Idempotency
+#### Idempotency
 
-Every `ensure_*` step looks up the resource by name (and lifecycle state)
-before creating it. Safe to re-run after a failure or on a different
-machine — the script will detect existing resources and reuse them. The
-local output directory is the only place where secret material lives,
-so guard it accordingly.
+Every `ensure_*` step looks up the resource by name (and lifecycle state) before creating it. Safe to re-run after a failure or on a different machine — the script will detect existing resources and reuse them. The local output directory is the only place where secret material lives, so guard it accordingly.
 
-If the IAM user already exists but the local `<sa>.pem` /
-`<sa>_credentials.json` are missing, the script generates a fresh
-RSA‑4096 key and uploads it to OCI. OCI users can hold up to 3 API keys;
-if 3 are already present the script exits with code `5` and asks you to
-remove one first.
+If the IAM user already exists but the local `<sa>.pem` /`<sa>_credentials.json` are missing, the script generates a fresh RSA‑4096 key and uploads it to OCI. OCI users can hold up to 3 API keys; if 3 are already present the script exits with code `5` and asks you to remove one first.
 
-## Troubleshooting
+#### Troubleshooting
 
-- **`NotAuthorizedOrNotFound` 404 right after a create.** Expected: OCI's
-  IAM control plane is eventually consistent and a freshly-created
-  compartment / user / group can be invisible for a few seconds. The
-  script's `_wait_for_state` poller treats 404 (and 5xx) as transient and
-  retries with a fast 5 s sleep until `--wait-seconds` elapses.
-- **`InvalidParameter: The compartmentId must be an ocid` during dry-run.**
-  Should not happen on the current code; if it does, you're running an
-  old copy. The dry-run path uses `ocid1.dryrun.<kind>` placeholders that
-  every downstream `ensure_*` recognises and short-circuits on.
-- **Vault is stuck in `CREATING`.** Default vaults can take 5–15 minutes
-  to become `ACTIVE`. The script polls every 30 s up to 30 min and emits
-  a heartbeat log line at least every 2 min. Bump `--wait-seconds` if
-  your tenancy is slower.
-- **`oci` CLI binary not on PATH warning.** Cosmetic — the script uses
-  the `oci` Python SDK, not the CLI shell-out. Install the CLI only if
-  you want it for ad-hoc operations.
-
-## Exit codes
-
-| Code | Meaning |
-|---|---|
-| `0` | Success. |
-| `1` | OCI API or polling failure during a resource step (see log). |
-| `2` | Required Python deps missing. |
-| `3` | OCI config file missing or invalid. |
-| `4` | OCI authentication preflight failed. |
-| `5` | IAM user already has the OCI maximum (3) API keys. |
+- **`NotAuthorizedOrNotFound` 404 right after a create.** Expected: OCI's IAM control plane is eventually consistent and a freshly-created compartment / user / group can be invisible for a few seconds. The script's `_wait_for_state` poller treats 404 (and 5xx) as transient and retries with a fast 5 s sleep until `--wait-seconds` elapses.
+- **`InvalidParameter: The compartmentId must be an ocid` during dry-run.** Should not happen on the current code; if it does, you're running an old copy. The dry-run path uses `ocid1.dryrun.<kind>` placeholders that every downstream `ensure_*` recognises and short-circuits on.
+- **Vault is stuck in `CREATING`.** Default vaults can take 5–15 minutes to become `ACTIVE`. The script polls every 30 s up to 30 min and emits a heartbeat log line at least every 2 min. Bump `--wait-seconds` if your tenancy is slower.
+- **`oci` CLI binary not on PATH warning.** Cosmetic — the script uses the `oci` Python SDK, not the CLI shell-out. Install the CLI only if you want it for ad-hoc operations.
 
 ---
 
-# manage-vault
+### manage-vault
 
-Multi-subcommand CLI for day-2 OCI Vault secret operations. All
-subcommands share a common set of flags (vault name, compartment, auth,
-verbosity, dry-run, polling) and are admin-only by design.
+Multi-subcommand CLI for day-2 OCI Vault secret operations. All subcommands share a common set of flags (vault name, compartment, auth, verbosity, dry-run, polling) and are admin-only by design.
 
-This script does **not** provision the vault. Run `initialize-oci`
-first (or have a vault and at least one MEK in place by some other means).
+This script does **not** provision the vault. Run `initialize-oci` first (or have a vault and at least one MEK in place by some other means).
 
-## Prerequisites
-
-- Python 3.9 or newer.
-- An OCI principal with the appropriate permissions (see IAM policy notes
-  per subcommand below). By default this is the tenancy admin
-  (`~/.oci/config` `DEFAULT` profile).
-- `~/.oci/config` configured (see `oci setup config`).
-- Defaults assume `initialize-oci` was run with its own defaults
-  (`vault_automation`, `cpm_automation`).
-
-## Install
-
-```
-# Install from the main branch (latest)
-pip install "git+https://github.com/initialgyw/gywadmin-oci.git@main"
-
-# Or install a specific version tag (e.g., 0.1.0)
-pip install "git+https://github.com/initialgyw/gywadmin-oci.git@0.1.0"
-```
-
-`--help` works without the optional deps installed.
-
-## Universal flags
+#### Universal flags
 
 All subcommands inherit these flags:
 
@@ -293,18 +215,9 @@ All subcommands inherit these flags:
 > Other subcommands do not accept it. `--dry-run` is accepted by all
 > subcommands but is a no-op for `list-secrets` (which is read-only).
 
-## Verbosity
-
-| Flag | Root level | `urllib3` / `oci.circuit_breaker` / `oci.config` |
-|---|---|---|
-| (none) | WARNING | WARNING |
-| `-v` | INFO | WARNING |
-| `-vv` | DEBUG | INFO |
-| `-vvv` | DEBUG | DEBUG (full HTTP trace) |
-
 The secret value is never written to logs at any verbosity.
 
-## Operator workflow example
+#### Operator workflow example
 
 The short aliases `-n` / `--name` (for `--secret-name`) and `--value` (for
 `--secret-value`) are accepted by both subcommands; the canonical long
@@ -339,16 +252,11 @@ manage-vault delete-secret \
     --yes
 ```
 
----
+#### add-secret
 
-## add-secret
+Create or update a secret in an OCI Vault. If the secret does not exist it is created; if it already exists, a new version is pushed (always create-or-update). The master encryption key is auto-discovered: the vault must contain exactly one `ENABLED` key.
 
-Create or update a secret in an OCI Vault. If the secret does not exist
-it is created; if it already exists, a new version is pushed (always
-create-or-update). The master encryption key is auto-discovered: the
-vault must contain exactly one `ENABLED` key.
-
-### Usage
+##### Usage
 
 ```
 manage-vault add-secret \
@@ -365,28 +273,25 @@ manage-vault add-secret \
     --secret-name pi_root_password
 ```
 
-### Flags
+##### Flags
 
 | Flag | Default | Purpose |
 |---|---|---|
 | `--secret-name` / `--name` / `-n` | (required) | Display name of the secret. |
 | `--secret-value` / `--value` | _(prompt)_ | Literal value, `-` to read from stdin until EOF, or omit to be prompted interactively (hidden input + confirmation). Non-TTY stdin without this flag is rejected (exit 9). |
 
-### IAM policy
+##### IAM policy
 
 ```
 Allow group <grp> to manage secret-family in compartment <cpm>
 ```
 
----
+#### delete-secret
 
-## delete-secret
-
-Schedule a vault secret for deletion. The secret enters `PENDING_DELETION`
-state and is permanently deleted after the retention window (1–30 days).
+Schedule a vault secret for deletion. The secret enters `PENDING_DELETION` state and is permanently deleted after the retention window (1–30 days).
 Idempotent: already-deleting secrets exit 0.
 
-### Usage
+##### Usage
 
 ```
 manage-vault delete-secret \
@@ -404,7 +309,7 @@ manage-vault delete-secret \
     --dry-run
 ```
 
-### Flags
+##### Flags
 
 | Flag | Default | Purpose |
 |---|---|---|
@@ -412,22 +317,20 @@ manage-vault delete-secret \
 | `--days` | `0` (OCI minimum = 1 day) | Days from now until deletion (1–30). |
 | `--time-of-deletion` | — | Explicit RFC 3339 timestamp. Overrides `--days`. |
 
-### IAM policy
+##### IAM policy
 
 ```
 Allow group <grp> to manage secret-family in compartment <cpm>
 ```
 
----
-
-## list-secrets
+#### list-secrets
 
 List the secrets in an OCI Vault as a four-column table (Name, Versions,
 Lifecycle, Tags). `Versions` is rendered as `current/total`. `Lifecycle`
 is blank for `ACTIVE` secrets and shows the state otherwise. `Tags` shows
 freeform tags only as `key=value` pairs.
 
-### Usage
+##### Usage
 
 ```
 manage-vault list-secrets
@@ -435,7 +338,7 @@ manage-vault list-secrets
 manage-vault list-secrets --output-format json | jq
 ```
 
-### Flags
+##### Flags
 
 | Flag | Default | Purpose |
 |---|---|---|
@@ -444,7 +347,7 @@ manage-vault list-secrets --output-format json | jq
 
 > **Note:** Tags column shows freeform tags only; use `--output-format json` for `defined_tags` and `system_tags`.
 
-### IAM policy
+##### IAM policy
 
 ```
 Allow group <grp> to read secret-family in compartment <cpm>
@@ -452,12 +355,11 @@ Allow group <grp> to read secret-family in compartment <cpm>
 
 ---
 
-# update-github-secrets
+### update-github-secrets
 
-Pushes the seven GitHub Actions secrets produced by `initialize-oci` into a
-GitHub repository using the `gh` CLI.
+Pushes the seven GitHub Actions secrets produced by `initialize-oci` into a GitHub repository using the `gh` CLI.
 
-Secrets set:
+#### Secrets set
 
 | Secret name | Source in summary JSON |
 |---|---|
@@ -469,13 +371,7 @@ Secrets set:
 | `OCI_CLI_KEY_CONTENT` | `service_account.api_key.private_pem` |
 | `TF_VAR_private_key_password` | `service_account.api_key.passphrase` |
 
-## Prerequisites
-
-- Python 3.9 or newer.
-- The GitHub CLI (`gh`) must be installed and authenticated (`gh auth login`).
-- You must have run `initialize-oci --create-sa-keys` to generate the summary JSON file (the `customer_secret_key` block is only present when that flag is used).
-
-## Flags
+#### Flags
 
 | Flag | Default | Required | Purpose |
 |---|---|---|---|
@@ -486,7 +382,7 @@ Secrets set:
 | `--fail-fast` | `false` | No | Abort on the first failed secret instead of best-effort (default: continue and report all failures). |
 | `--verbose` / `-v` | `0` | No | Increase log verbosity. Repeat for more detail: `-v`=INFO, `-vv`=DEBUG, `-vvv`=TRACE. |
 
-## Usage
+#### Usage
 
 Dry run (no GitHub calls, no confirmation required):
 
@@ -514,20 +410,9 @@ update-github-secrets \
   --yes
 ```
 
-## Exit codes (update-github-secrets)
-
-| Code | Meaning |
-|---|---|
-| `0` | All secrets set (or dry-run completed). |
-| `1` | One or more secrets failed to set. |
-| `2` | `gh` CLI not found in PATH. |
-| `3` | Summary file missing, unreadable, invalid JSON, or invalid contents. |
-| `4` | `gh auth status` or `gh repo view` preflight failed. |
-| `11` | User declined the confirmation prompt. |
-
 ---
 
-## Consolidated exit codes
+## Exit codes
 
 | Code | Meaning | Entry points |
 |---|---|---|
