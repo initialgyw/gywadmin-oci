@@ -312,7 +312,7 @@ def parse_args(argv: Optional[List[str]] = None) -> Args:
         action="store_true",
         help="If the service account has reached the maximum of 3 API keys, delete the oldest one instead of exiting.",
     )
-    
+
     parsed = parser.parse_args(argv)
 
     return Args(
@@ -1018,7 +1018,9 @@ def ensure_api_key(ctx: Context, user_ocid: str) -> Dict[str, Any]:
                     oldest_key.fingerprint,
                     oldest_key.time_created,
                 )
-                ctx.identity.delete_api_key(user_id=user_ocid, fingerprint=oldest_key.fingerprint)
+                ctx.identity.delete_api_key(
+                    user_id=user_ocid, fingerprint=oldest_key.fingerprint
+                )
         else:
             log.error(
                 "User %s already has %d API keys (OCI maximum is 3). Remove one or run with --delete-old-api-key before re-running.",
@@ -1300,7 +1302,9 @@ def ensure_policy(
     if existing:
         policy = existing[0]
         existing_norm = {_normalize_statement(s) for s in (policy.statements or [])}
-        missing_actual = [s for s in desired if _normalize_statement(s) not in existing_norm]
+        missing_actual = [
+            s for s in desired if _normalize_statement(s) not in existing_norm
+        ]
         if not missing_actual:
             log.info(
                 "policy '%s' exists and contains all required statements [%s]",
