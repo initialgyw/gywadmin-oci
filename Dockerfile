@@ -10,6 +10,8 @@ LABEL org.opencontainers.image.version=$VERSION
 
 WORKDIR /app
 
+RUN apk add --no-cache github-cli
+
 COPY pyproject.toml README.md LICENSE ./
 COPY src/ ./src/
 

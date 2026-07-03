@@ -94,7 +94,7 @@ DEFAULT_MEK = "mek_automation"
 DEFAULT_SERVICE_ACCOUNT = "sa_automation"
 DEFAULT_GROUP = "grp_automation"
 DEFAULT_POLICY = "policy_grp_automation"
-DEFAULT_OUTPUT_DIR = str(Path(__file__).resolve().parent / "output")
+DEFAULT_OUTPUT_DIR = "output"
 DEFAULT_TAG_KEY = "created_by"
 DEFAULT_TAG_VALUE = "initialize-oci.py"
 DEFAULT_OCI_CONFIG = "~/.oci/config"
@@ -154,6 +154,7 @@ class Args:
     wait_seconds: int
     interval_seconds: int
     create_sa_keys: bool
+    delete_old_api_key: bool
 
 
 @dataclass
@@ -306,6 +307,12 @@ def parse_args(argv: Optional[List[str]] = None) -> Args:
         ),
     )
 
+    parser.add_argument(
+        "--delete-old-api-key",
+        action="store_true",
+        help="If the service account has reached the maximum of 3 API keys, delete the oldest one instead of exiting.",
+    )
+
     parsed = parser.parse_args(argv)
 
     return Args(
@@ -327,6 +334,7 @@ def parse_args(argv: Optional[List[str]] = None) -> Args:
         wait_seconds=parsed.wait_seconds,
         interval_seconds=parsed.interval_seconds,
         create_sa_keys=parsed.create_sa_keys,
+        delete_old_api_key=parsed.delete_old_api_key,
     )
 
 
@@ -388,9 +396,11 @@ def build_clients(config: Dict[str, Any]) -> Dict[str, Any]:
         A mapping with keys ``identity``, ``object_storage``, ``kms_vault``.
     """
     return {
-        "identity": oci.identity.IdentityClient(config),
-        "object_storage": oci.object_storage.ObjectStorageClient(config),
-        "kms_vault": oci.key_management.KmsVaultClient(config),
+        "identity": common.make_client(oci.identity.IdentityClient, config),
+        "object_storage": common.make_client(
+            oci.object_storage.ObjectStorageClient, config
+        ),
+        "kms_vault": common.make_client(oci.key_management.KmsVaultClient, config),
     }
 
 
@@ -628,8 +638,10 @@ def ensure_master_encryption_key(
         log.info("[DRY-RUN] vault is a placeholder; would create MEK '%s'", name)
         return _dry_run_ocid("key")
 
-    mgmt = oci.key_management.KmsManagementClient(
-        ctx.config, service_endpoint=management_endpoint
+    mgmt = common.make_client(
+        oci.key_management.KmsManagementClient,
+        ctx.config,
+        service_endpoint=management_endpoint,
     )
 
     existing = [
@@ -982,6 +994,8 @@ def ensure_api_key(ctx: Context, user_ocid: str) -> Dict[str, Any]:
                 "fingerprint": stored["fingerprint"],
                 "key_file": str(paths["private_key"]),
                 "credentials_file": str(paths["credentials"]),
+                "private_pem": paths["private_key"].read_text(encoding="utf-8"),
+                "passphrase": stored.get("passphrase", ""),
                 "new": False,
             }
         log.warning(
@@ -990,12 +1004,30 @@ def ensure_api_key(ctx: Context, user_ocid: str) -> Dict[str, Any]:
         )
 
     if len(existing_keys) >= 3:
-        log.error(
-            "User %s already has %d API keys (OCI maximum is 3). Remove one before re-running.",
-            sa_name,
-            len(existing_keys),
-        )
-        raise SystemExit(5)
+        if ctx.args.delete_old_api_key:
+            oldest_key = sorted(existing_keys, key=lambda k: k.time_created)[0]
+            if ctx.dry_run:
+                log.info(
+                    "[DRY-RUN] would delete oldest API key %s (created %s) to make room for new key",
+                    oldest_key.fingerprint,
+                    oldest_key.time_created,
+                )
+            else:
+                log.info(
+                    "Deleting oldest API key %s (created %s) to make room for new key",
+                    oldest_key.fingerprint,
+                    oldest_key.time_created,
+                )
+                ctx.identity.delete_api_key(
+                    user_id=user_ocid, fingerprint=oldest_key.fingerprint
+                )
+        else:
+            log.error(
+                "User %s already has %d API keys (OCI maximum is 3). Remove one or run with --delete-old-api-key before re-running.",
+                sa_name,
+                len(existing_keys),
+            )
+            raise SystemExit(5)
 
     if ctx.dry_run:
         log.info("[DRY-RUN] would generate and upload a new API key for %s", sa_name)
@@ -1043,6 +1075,8 @@ def ensure_api_key(ctx: Context, user_ocid: str) -> Dict[str, Any]:
         "fingerprint": keypair["fingerprint"],
         "key_file": str(paths["private_key"]),
         "credentials_file": str(paths["credentials"]),
+        "private_pem": keypair["private_pem"].decode("utf-8"),
+        "passphrase": passphrase,
         "new": True,
     }
 
@@ -1145,12 +1179,13 @@ def ensure_customer_secret_key(
                 len(existing),
                 sa_name,
             )
-            return {
-                "access_key": "dryrun",
-                "credentials_file": str(aws_path),
-                "display_name": display_name,
-                "new": True,
-            }
+        return {
+            "access_key": "dryrun",
+            "secret_key": "dryrun",
+            "credentials_file": str(aws_path),
+            "display_name": display_name,
+            "new": True,
+        }
         for key in existing:
             log.info(
                 "Deleting Customer Secret Key %s (display_name=%s)",
@@ -1198,6 +1233,7 @@ def ensure_customer_secret_key(
 
     return {
         "access_key": access_key,
+        "secret_key": secret_key,
         "credentials_file": str(aws_path),
         "display_name": display_name,
         "new": True,
@@ -1223,7 +1259,7 @@ def _policy_statements(
     return [
         f"Allow group {group_name} to manage objects in compartment {compartment_name} "
         f"where target.bucket.name='{bucket_name}'",
-        f"Allow group {group_name} to read secret-family in compartment {compartment_name}",
+        f"Allow group {group_name} to manage secret-family in compartment {compartment_name}",
         f"Allow group {group_name} to read vaults in compartment {compartment_name}",
     ]
 
@@ -1257,7 +1293,6 @@ def ensure_policy(
     name = ctx.args.policy
     log = ctx.log
     desired = _policy_statements(group_name, compartment_name, bucket_name)
-    desired_norm = {_normalize_statement(s) for s in desired}
 
     existing = [
         p
@@ -1267,8 +1302,10 @@ def ensure_policy(
     if existing:
         policy = existing[0]
         existing_norm = {_normalize_statement(s) for s in (policy.statements or [])}
-        missing = desired_norm - existing_norm
-        if not missing:
+        missing_actual = [
+            s for s in desired if _normalize_statement(s) not in existing_norm
+        ]
+        if not missing_actual:
             log.info(
                 "policy '%s' exists and contains all required statements [%s]",
                 name,
@@ -1276,22 +1313,24 @@ def ensure_policy(
             )
             return policy.id
 
+        missing_list_str = "\n  - " + "\n  - ".join(missing_actual)
+
         if ctx.dry_run:
             log.info(
-                "[DRY-RUN] would update policy '%s' to add %d missing statement(s)",
+                "[DRY-RUN] would update policy '%s' to add %d missing statement(s):%s",
                 name,
-                len(missing),
+                len(missing_actual),
+                missing_list_str,
             )
             return policy.id
 
         merged = list(policy.statements or [])
-        for stmt in desired:
-            if _normalize_statement(stmt) not in existing_norm:
-                merged.append(stmt)
+        merged.extend(missing_actual)
         log.info(
-            "Updating policy '%s' to add %d missing statement(s)",
+            "Updating policy '%s' to add %d missing statement(s):%s",
             name,
-            len(missing),
+            len(missing_actual),
+            missing_list_str,
         )
         ctx.identity.update_policy(
             policy.id,
