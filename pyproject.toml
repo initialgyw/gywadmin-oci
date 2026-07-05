@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gywadmin-oci"
-version = "0.2.2"
+version = "0.2.3"
 description = "OCI Vault + initialization helpers for gywadmin-homelab"
 readme = "README.md"
 requires-python = ">=3.9"

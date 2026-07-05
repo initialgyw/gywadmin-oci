@@ -1261,7 +1261,7 @@ def _policy_statements(
         f"where target.bucket.name='{bucket_name}'",
         f"Allow group {group_name} to manage secret-family in compartment {compartment_name}",
         f"Allow group {group_name} to use keys in compartment {compartment_name}",
-        f"Allow group {group_name} to read vaults in compartment {compartment_name}",
+        f"Allow group {group_name} to use vaults in compartment {compartment_name}",
     ]
 
 
