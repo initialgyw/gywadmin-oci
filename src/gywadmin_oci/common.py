@@ -13,6 +13,9 @@ Public surface
   (``oci``, optionally ``cryptography``) are missing.
 * :func:`load_oci_config` — load and validate an OCI CLI config profile
   (API-key **or** session-token).
+* :func:`load_oci_config_from_summary` — build and validate an API-key OCI
+  config directly from an ``initialize-oci-summary.json`` file (in-memory
+  ``key_content``; no temp key file).
 * :func:`build_signer` — return a ``SecurityTokenSigner`` for session-token
   configs, or ``None`` for classic API-key configs.
 * :func:`make_client` — construct an OCI service client, attaching a
@@ -406,6 +409,122 @@ def load_oci_config(
         log.error("OCI config did not validate: %s", exc)
         raise SystemExit(3) from exc
 
+    return config
+
+
+def load_oci_config_from_summary(
+    summary_path: Path,
+    region_override: Optional[str],
+    log: logging.Logger,
+) -> Dict[str, Any]:
+    """Build and validate an API-key OCI config from an initialize-oci summary.
+
+    Reads the service-account API-key credentials embedded in an
+    ``initialize-oci-summary.json`` file and constructs an OCI config dict
+    that authenticates as that service account (``sa_automation``). The
+    private key is passed in-memory via the ``key_content`` config key (a
+    validated alternative to ``key_file``), so no temporary key file is
+    written to disk.
+
+    The summary is expected to have (at least) this shape::
+
+        {
+          "tenancy_ocid": "ocid1.tenancy...",
+          "region": "us-ashburn-1",
+          "service_account": {
+            "ocid": "ocid1.user...",
+            "api_key": {
+              "fingerprint": "...",
+              "private_pem": "-----BEGIN...",
+              "passphrase": "..."
+            }
+          }
+        }
+
+    Unlike the ``--oci-config-file`` path, a summary that is missing,
+    unreadable, contains invalid JSON, or lacks a required field is a hard
+    failure (``SystemExit(3)``): there is no silent fallback.
+
+    Args:
+        summary_path: Filesystem path to the ``initialize-oci-summary.json``
+            file.
+        region_override: Optional region string that overrides ``region``
+            from the summary.
+        log: Active logger.
+
+    Returns:
+        A validated OCI config dict suitable for passing to ``oci`` service
+        clients, using in-memory ``key_content``.
+
+    Raises:
+        SystemExit: With code ``3`` if the summary is missing/unreadable,
+            contains invalid JSON, lacks a required field, has an empty
+            required field, or fails ``oci.config.validate_config``.
+
+    Security:
+        Never logs the private key (``key_content``) or the passphrase
+        (``pass_phrase``). The single success line logs only the summary
+        path, the service-account user OCID, and the region.
+    """
+    validate_summary_file(summary_path, log=log)
+    data = load_summary(summary_path, log=log)
+
+    try:
+        sa = data["service_account"]
+        api_key = sa["api_key"]
+        config = {
+            "user": sa["ocid"],
+            "tenancy": data["tenancy_ocid"],
+            "fingerprint": api_key["fingerprint"],
+            "key_content": api_key["private_pem"],
+            "pass_phrase": api_key.get("passphrase") or None,
+            "region": data.get("region", ""),
+        }
+    except (KeyError, TypeError) as exc:
+        # TypeError covers e.g. data["service_account"] being None.
+        log.error(
+            "Summary file %s is missing required service-account fields: %s",
+            summary_path,
+            exc,
+        )
+        raise SystemExit(3) from exc
+
+    # Verify required fields are present and non-empty. Report by KEY NAME
+    # only — never the underlying values.
+    required_keys = ("user", "tenancy", "fingerprint", "key_content")
+    empty = [key for key in required_keys if not config.get(key)]
+    if empty:
+        log.error(
+            "Summary file %s produced an OCI config with empty required field(s): %s",
+            summary_path,
+            ", ".join(empty),
+        )
+        raise SystemExit(3)
+
+    if region_override:
+        log.info(
+            "Overriding region from --region: %s -> %s",
+            config.get("region"),
+            region_override,
+        )
+        config["region"] = region_override
+
+    try:
+        oci.config.validate_config(config)
+    except Exception as exc:  # pragma: no cover - depends on summary contents
+        log.error(
+            "OCI config built from summary %s did not validate: %s",
+            summary_path,
+            exc,
+        )
+        raise SystemExit(3) from exc
+
+    log.info(
+        "Loaded OCI config from summary %s (service_account user=%s, region=%s)",
+        summary_path,
+        config["user"],
+        config.get("region"),
+    )
     return config
 
 

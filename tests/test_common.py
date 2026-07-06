@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from dataclasses import is_dataclass
@@ -9,6 +10,7 @@ from gywadmin_oci.common import (
     DEFAULT_SUMMARY_PATH,
     OciSummarySecrets,
     atomic_write,
+    load_oci_config_from_summary,
     load_summary,
     validate_summary_file,
 )
@@ -149,3 +151,110 @@ class TestAtomicWrite:
 class TestModuleConstants:
     def test_default_summary_path_constant(self):
         assert DEFAULT_SUMMARY_PATH == Path("output/initialize-oci-summary.json")
+
+
+# Fake credentials whose FORMAT satisfies oci.config.validate_config:
+# tenancy/user match the OCID regex and the fingerprint matches
+# ``^([0-9a-f]{2}:){15}[0-9a-f]{2}$``. The private_pem is not a real key,
+# but validate_config only checks presence for key_content.
+_VALID_FINGERPRINT = "12:34:56:78:90:ab:cd:ef:12:34:56:78:90:ab:cd:ef"
+_FAKE_PEM = "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----\n"
+_FAKE_PASSPHRASE = "p@ssw0rd"
+
+
+def _valid_summary():
+    return {
+        "tenancy_ocid": "ocid1.tenancy.oc1..aaaa",
+        "region": "us-ashburn-1",
+        "service_account": {
+            "ocid": "ocid1.user.oc1..bbbb",
+            "customer_secret_key": {
+                "access_key": "AKIAEXAMPLE",
+                "secret_key": "secretvalue123",
+            },
+            "api_key": {
+                "fingerprint": _VALID_FINGERPRINT,
+                "private_pem": _FAKE_PEM,
+                "passphrase": _FAKE_PASSPHRASE,
+            },
+        },
+    }
+
+
+def _write_summary(tmp_path, data):
+    path = tmp_path / "initialize-oci-summary.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    if os.name == "posix":
+        os.chmod(path, 0o600)
+    return path
+
+
+class TestLoadOciConfigFromSummary:
+    def test_happy_path(self, tmp_path):
+        log = logging.getLogger("test")
+        path = _write_summary(tmp_path, _valid_summary())
+        config = load_oci_config_from_summary(path, None, log)
+        assert config["user"] == "ocid1.user.oc1..bbbb"
+        assert config["tenancy"] == "ocid1.tenancy.oc1..aaaa"
+        assert config["fingerprint"] == _VALID_FINGERPRINT
+        assert config["key_content"] == _FAKE_PEM
+        assert config["pass_phrase"] == _FAKE_PASSPHRASE
+        assert config["region"] == "us-ashburn-1"
+
+    def test_region_override(self, tmp_path):
+        log = logging.getLogger("test")
+        path = _write_summary(tmp_path, _valid_summary())
+        config = load_oci_config_from_summary(path, "us-phoenix-1", log)
+        assert config["region"] == "us-phoenix-1"
+
+    def test_missing_field_fingerprint(self, tmp_path):
+        log = logging.getLogger("test")
+        data = _valid_summary()
+        del data["service_account"]["api_key"]["fingerprint"]
+        path = _write_summary(tmp_path, data)
+        with pytest.raises(SystemExit) as exc:
+            load_oci_config_from_summary(path, None, log)
+        assert exc.value.code == 3
+
+    def test_missing_service_account(self, tmp_path):
+        log = logging.getLogger("test")
+        data = _valid_summary()
+        del data["service_account"]
+        path = _write_summary(tmp_path, data)
+        with pytest.raises(SystemExit) as exc:
+            load_oci_config_from_summary(path, None, log)
+        assert exc.value.code == 3
+
+    def test_empty_required_field(self, tmp_path):
+        log = logging.getLogger("test")
+        data = _valid_summary()
+        data["service_account"]["ocid"] = ""
+        path = _write_summary(tmp_path, data)
+        with pytest.raises(SystemExit) as exc:
+            load_oci_config_from_summary(path, None, log)
+        assert exc.value.code == 3
+
+    def test_missing_file(self, tmp_path):
+        log = logging.getLogger("test")
+        missing = tmp_path / "nope.json"
+        with pytest.raises(SystemExit) as exc:
+            load_oci_config_from_summary(missing, None, log)
+        assert exc.value.code == 3
+
+    def test_bad_json(self, tmp_path):
+        log = logging.getLogger("test")
+        path = tmp_path / "bad.json"
+        path.write_text("not json", encoding="utf-8")
+        if os.name == "posix":
+            os.chmod(path, 0o600)
+        with pytest.raises(SystemExit) as exc:
+            load_oci_config_from_summary(path, None, log)
+        assert exc.value.code == 3
+
+    def test_no_secret_leak(self, tmp_path, caplog):
+        log = logging.getLogger("test")
+        path = _write_summary(tmp_path, _valid_summary())
+        with caplog.at_level(logging.DEBUG):
+            load_oci_config_from_summary(path, None, log)
+        assert "MIIE" not in caplog.text
+        assert _FAKE_PASSPHRASE not in caplog.text

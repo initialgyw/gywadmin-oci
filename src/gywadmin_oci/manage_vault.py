@@ -145,6 +145,17 @@ def _build_common_parser() -> argparse.ArgumentParser:
         help="Profile within the OCI CLI config file. (default: %(default)s)",
     )
     p.add_argument(
+        "--summary-file",
+        "-f",
+        default=None,
+        help=(
+            "Path to an initialize-oci-summary.json file. When provided, "
+            "authenticate as the service account (sa_automation) using the API "
+            "key embedded in the summary instead of reading --oci-config-file. "
+            "Falls back to --oci-config-file when omitted. (default: %(default)s)"
+        ),
+    )
+    p.add_argument(
         "--region",
         default=None,
         help="Override the region in the OCI CLI config (e.g. us-ashburn-1).",
@@ -438,6 +449,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
     # Normalise config path.
     ns.oci_config_file = Path(ns.oci_config_file).expanduser().resolve()
+    if ns.summary_file is not None:
+        ns.summary_file = Path(ns.summary_file).expanduser().resolve()
 
     return ns
 
@@ -962,6 +975,34 @@ def _print_json(rows: List[Dict[str, Any]]) -> None:
     print(json.dumps(rows, indent=2, sort_keys=True, default=str))
 
 
+def _resolve_oci_config(
+    args: argparse.Namespace, log: logging.Logger
+) -> Dict[str, Any]:
+    """Load the OCI config for a subcommand.
+
+    Prefers the service-account credentials embedded in ``--summary-file``
+    when provided; otherwise falls back to ``--oci-config-file`` (default
+    ``~/.oci/config``). An explicitly-provided summary that fails to load
+    hard-fails (SystemExit 3); there is no silent fallback.
+    """
+    if getattr(args, "summary_file", None) is not None:
+        log.info(
+            "Authenticating via service account from summary file %s",
+            args.summary_file,
+        )
+        return common.load_oci_config_from_summary(
+            summary_path=args.summary_file,
+            region_override=args.region,
+            log=log,
+        )
+    return common.load_oci_config(
+        config_path=args.oci_config_file,
+        profile=args.oci_profile,
+        region_override=args.region,
+        log=log,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Subcommand implementations
 # ---------------------------------------------------------------------------
@@ -1011,12 +1052,7 @@ def cmd_add_secret(args: argparse.Namespace, log: logging.Logger) -> int:
 
     common.require_dependencies(log, need_cryptography=False)
 
-    config = common.load_oci_config(
-        config_path=args.oci_config_file,
-        profile=args.oci_profile,
-        region_override=args.region,
-        log=log,
-    )
+    config = _resolve_oci_config(args, log)
     tenancy_ocid = common.verify_oci_authenticated(config, log, level=logging.DEBUG)
 
     identity_client = common.make_client(oci.identity.IdentityClient, config)
@@ -1345,12 +1381,7 @@ def cmd_update_secret(args: argparse.Namespace, log: logging.Logger) -> int:
 
     common.require_dependencies(log, need_cryptography=False)
 
-    config = common.load_oci_config(
-        config_path=args.oci_config_file,
-        profile=args.oci_profile,
-        region_override=args.region,
-        log=log,
-    )
+    config = _resolve_oci_config(args, log)
     tenancy_ocid = common.verify_oci_authenticated(config, log, level=logging.DEBUG)
 
     identity_client = common.make_client(oci.identity.IdentityClient, config)
@@ -1625,12 +1656,7 @@ def cmd_get_secret(args: argparse.Namespace, log: logging.Logger) -> int:
 
     common.require_dependencies(log, need_cryptography=False)
 
-    config = common.load_oci_config(
-        config_path=args.oci_config_file,
-        profile=args.oci_profile,
-        region_override=args.region,
-        log=log,
-    )
+    config = _resolve_oci_config(args, log)
     tenancy_ocid = common.verify_oci_authenticated(config, log, level=logging.DEBUG)
 
     identity_client = common.make_client(oci.identity.IdentityClient, config)
@@ -1781,12 +1807,7 @@ def cmd_delete_secret(args: argparse.Namespace, log: logging.Logger) -> int:
 
     common.require_dependencies(log, need_cryptography=False)
 
-    config = common.load_oci_config(
-        config_path=args.oci_config_file,
-        profile=args.oci_profile,
-        region_override=args.region,
-        log=log,
-    )
+    config = _resolve_oci_config(args, log)
     tenancy_ocid = common.verify_oci_authenticated(config, log, level=logging.DEBUG)
 
     identity_client = common.make_client(oci.identity.IdentityClient, config)
@@ -1967,12 +1988,7 @@ def cmd_list_secrets(args: argparse.Namespace, log: logging.Logger) -> int:
 
     common.require_dependencies(log, need_cryptography=False)
 
-    config = common.load_oci_config(
-        config_path=args.oci_config_file,
-        profile=args.oci_profile,
-        region_override=args.region,
-        log=log,
-    )
+    config = _resolve_oci_config(args, log)
     tenancy_ocid = common.verify_oci_authenticated(config, log, level=logging.DEBUG)
 
     identity_client = common.make_client(oci.identity.IdentityClient, config)

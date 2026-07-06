@@ -128,6 +128,21 @@ Multi-subcommand CLI for day-2 OCI Vault secret operations. All subcommands shar
 
 This script does **not** provision the vault. Run `initialize-oci` first (or have a vault and at least one MEK in place by some other means).
 
+##### Authentication (`--summary-file`)
+
+By default every subcommand authenticates using `--oci-config-file` (default `~/.oci/config`). Alternatively, pass `--summary-file` / `-f` pointing at the `initialize-oci-summary.json` produced by `initialize-oci` to authenticate as the service account (`sa_automation`) using the API key embedded in that summary — no `~/.oci/config` required. The private key is read in-memory, so no key file has to exist on disk.
+
+```bash
+
+% manage-vault list-secrets -f output/initialize-oci-summary.json
+
+# via docker, mounting the output dir instead of ~/.oci
+# docker run --rm -v "${PWD}/output:/output" ghcr.io/initialgyw/gywadmin-oci:<version> \
+#   manage-vault list-secrets -f /output/initialize-oci-summary.json
+```
+
+When `--summary-file` is omitted, `manage-vault` falls back to `--oci-config-file`. When it **is** provided but is missing, unreadable, or lacks the required service-account fields, the command hard-fails (exit code 3) rather than silently falling back.
+
 ##### list-secrets
 
 ```bash
@@ -227,7 +242,7 @@ pip install -e . -r py-requirements-dev.txt
 | `0` | Success (or clean dry-run, or idempotent no-op). | All |
 | `1` | Generic OCI / polling failure; or one or more secrets failed to set. | All |
 | `2` | Required Python deps missing (`initialize-oci`, `manage-vault`); `gh` CLI not found (`update-github-secrets`). | All |
-| `3` | OCI config file missing or invalid (`initialize-oci`, `manage-vault`); summary file missing/unreadable/invalid (`update-github-secrets`). | All |
+| `3` | OCI config file missing or invalid (`initialize-oci`, `manage-vault`); summary file missing/unreadable/invalid (`manage-vault` with `--summary-file`, `update-github-secrets`). | All |
 | `4` | OCI authentication preflight failed (`initialize-oci`, `manage-vault`); `gh` auth or repo preflight failed (`update-github-secrets`). | All |
 | `5` | IAM user already has the OCI maximum (3) API keys (`initialize-oci`); compartment, vault, or secret not found (`manage-vault`). | `initialize-oci`, `manage-vault` |
 | `6` | Vault has zero or multiple `ENABLED` master encryption keys (auto-pick failed). | `add-secret` |
