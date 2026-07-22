@@ -234,8 +234,21 @@ Provisions all per-cluster resources and credentials. Idempotent: if all three V
 ```bash
 manage-unseal create --cluster-name k8s-01
 
+# Docker run:
+docker run --rm \
+  -v "$HOME/.oci:/root/.oci" \
+  ghcr.io/initialgyw/gywadmin-oci:0.3.0 \
+  manage-unseal create --cluster-name k8s-01
+
 # With an existing summary for faster OCID discovery (no compartment/vault lookup):
 manage-unseal create --cluster-name k8s-01 -f output/initialize-oci-summary.json
+
+# Docker run with summary file:
+docker run --rm \
+  -v "$HOME/.oci:/root/.oci" \
+  -v "${PWD}/output:/output" \
+  ghcr.io/initialgyw/gywadmin-oci:0.3.0 \
+  manage-unseal create --cluster-name k8s-01 -f /output/initialize-oci-summary.json
 
 # Dry run (no mutations):
 manage-unseal create --cluster-name k8s-01 --dry-run -v
@@ -249,6 +262,12 @@ Always generates fresh RSA-4096 key material and pushes new Vault secret version
 
 ```bash
 manage-unseal rotate --cluster-name k8s-01
+
+# Docker run:
+docker run --rm \
+  -v "$HOME/.oci:/root/.oci" \
+  ghcr.io/initialgyw/gywadmin-oci:0.3.0 \
+  manage-unseal rotate --cluster-name k8s-01
 
 # Make room at the 3-key cap by removing the oldest non-active spare:
 manage-unseal rotate --cluster-name k8s-01 --delete-old-api-key
@@ -270,6 +289,13 @@ Read-only JSON status report. Contains derived names, discovered OCIDs/lifecycle
 
 ```bash
 manage-unseal show --cluster-name k8s-01
+
+# Docker run:
+docker run --rm \
+  -v "$HOME/.oci:/root/.oci" \
+  ghcr.io/initialgyw/gywadmin-oci:0.3.0 \
+  manage-unseal show --cluster-name k8s-01
+
 manage-unseal show --cluster-name k8s-01 | jq .provisioning_complete
 ```
 
