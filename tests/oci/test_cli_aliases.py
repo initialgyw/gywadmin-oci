@@ -7,6 +7,8 @@ immediately pinpointed.
 
 from __future__ import annotations
 
+import pytest
+
 
 def test_add_secret_canonical_flags(mv):
     """``--secret-name`` / ``--secret-value`` set the expected attributes."""
@@ -33,6 +35,36 @@ def test_add_secret_mixed_canonical_and_alias(mv):
     args = mv.parse_args(["add-secret", "-n", "n", "--secret-value", "v"])
     assert args.secret_name == "n"
     assert args.secret_value == "v"
+
+
+def test_add_secret_uses_automation_mek_by_default(mv):
+    """New secrets default to the general-purpose automation MEK."""
+    args = mv.parse_args(["add-secret", "-n", "n", "--value", "v"])
+    assert args.mek_name == "mek_automation"
+
+
+def test_add_secret_accepts_explicit_mek_name(mv):
+    """An exact alternative key display name can be supplied at creation."""
+    args = mv.parse_args(
+        ["add-secret", "-n", "n", "--value", "v", "--mek-name", "application_mek"]
+    )
+    assert args.mek_name == "application_mek"
+
+
+def test_add_secret_trims_mek_name(mv):
+    """Surrounding whitespace does not become part of the exact key lookup."""
+    args = mv.parse_args(
+        ["add-secret", "-n", "n", "--value", "v", "--mek-name", "  application_mek  "]
+    )
+    assert args.mek_name == "application_mek"
+
+
+@pytest.mark.parametrize("mek_name", ["", "   "])
+def test_add_secret_rejects_empty_mek_name(mv, mek_name):
+    """Blank key names fail argument parsing before any OCI request."""
+    with pytest.raises(SystemExit) as exc:
+        mv.parse_args(["add-secret", "-n", "n", "--value", "v", "--mek-name", mek_name])
+    assert exc.value.code == 2
 
 
 def test_delete_secret_canonical_flag(mv):

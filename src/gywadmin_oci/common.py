@@ -1154,8 +1154,13 @@ def auto_pick_mek(
     management_endpoint: str,
     vault_name: str,
     log: logging.Logger,
+    mek_name: Optional[str] = None,
 ) -> Tuple[str, str]:
-    """Auto-discover the single ENABLED MEK in the vault.
+    """Resolve an ENABLED MEK in the vault.
+
+    Without ``mek_name``, preserves the legacy behavior of requiring exactly
+    one ENABLED key in the vault. With ``mek_name``, requires exactly one
+    ENABLED key with that exact display name; other enabled keys are allowed.
 
     Args:
         config: OCI config dict.
@@ -1163,24 +1168,66 @@ def auto_pick_mek(
         management_endpoint: Vault ``management_endpoint`` URL.
         vault_name: Vault display name (for log messages only).
         log: Active logger.
+        mek_name: Optional exact KMS key display name to select.
 
     Returns:
         Tuple of ``(mek_ocid, mek_display_name)``.
 
     Raises:
-        SystemExit: With code ``6`` if zero or more than one ENABLED key is
-            present in the vault.
+        SystemExit: With code ``6`` if the requested key is missing, not
+            enabled, or ambiguously named; or when legacy singleton selection
+            finds zero or more than one ENABLED key.
     """
     mgmt = make_client(
         oci.key_management.KmsManagementClient,
         config,
         service_endpoint=management_endpoint,
     )
-    enabled = [
-        k
-        for k in list_all(mgmt.list_keys, compartment_id=compartment_ocid)
-        if k.lifecycle_state == "ENABLED"
-    ]
+    keys = list_all(mgmt.list_keys, compartment_id=compartment_ocid)
+    enabled = [k for k in keys if k.lifecycle_state == "ENABLED"]
+
+    if mek_name is not None:
+        named = [k for k in keys if k.display_name == mek_name]
+        named_enabled = [k for k in named if k.lifecycle_state == "ENABLED"]
+
+        if len(named_enabled) == 1:
+            mek = named_enabled[0]
+            log.debug("selected MEK '%s' (%s)", mek.display_name, mek.id)
+            return mek.id, mek.display_name
+
+        if len(named_enabled) > 1:
+            log.error(
+                "Vault '%s' has %d ENABLED keys named '%s'; key display names "
+                "must identify exactly one enabled key.",
+                vault_name,
+                len(named_enabled),
+                mek_name,
+            )
+            raise SystemExit(6)
+
+        if named:
+            states = ", ".join(
+                sorted(
+                    {str(getattr(key, "lifecycle_state", "UNKNOWN")) for key in named}
+                )
+            )
+            log.error(
+                "Vault '%s' has no ENABLED key named '%s'. Matching key "
+                "lifecycle state(s): %s. Enable it or choose another key with "
+                "--mek-name.",
+                vault_name,
+                mek_name,
+                states,
+            )
+        else:
+            log.error(
+                "Vault '%s' has no key named '%s'. Create or enable that key, "
+                "or choose another key with --mek-name.",
+                vault_name,
+                mek_name,
+            )
+        raise SystemExit(6)
+
     if len(enabled) == 0:
         log.error(
             "Vault '%s' has no ENABLED master encryption keys. Create one (e.g. "

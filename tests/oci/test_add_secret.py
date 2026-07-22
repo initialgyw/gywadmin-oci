@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import io
 import logging
+from types import SimpleNamespace
 
 import pytest
 
@@ -85,6 +86,130 @@ def test_load_secret_value_stdin_source(mv, monkeypatch, caplog):
         assert "sha256" not in msg, (
             f"Log record unexpectedly contains 'sha256': {record.getMessage()!r}"
         )
+
+
+def test_cmd_add_secret_passes_named_mek_to_resolver_and_create(
+    mv, common, make_args, monkeypatch, log
+):
+    """The selected named key controls the OCI key_id for a new secret."""
+    calls: dict[str, object] = {}
+
+    class _VaultClient:
+        def list_secrets(self, **kwargs):  # noqa: ANN003, ANN201
+            raise AssertionError("common.list_all is stubbed")
+
+    def _make_client(*args, **kwargs):  # noqa: ANN002, ANN003
+        return _VaultClient()
+
+    def _auto_pick_mek(*args, **kwargs):  # noqa: ANN002, ANN003
+        calls["mek_name"] = kwargs["mek_name"]
+        return "ocid1.key.oc1..selected", "application_mek"
+
+    def _create_secret(*args, **kwargs):  # noqa: ANN002, ANN003
+        calls["mek_ocid"] = kwargs["mek_ocid"]
+        return SimpleNamespace(
+            id="ocid1.secret.oc1..created",
+            current_version_number=1,
+            lifecycle_state="ACTIVE",
+        )
+
+    monkeypatch.setattr(common, "require_dependencies", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mv, "_resolve_oci_config", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        common,
+        "verify_oci_authenticated",
+        lambda *args, **kwargs: "ocid1.tenancy.oc1..test",
+    )
+    monkeypatch.setattr(
+        mv,
+        "oci",
+        SimpleNamespace(
+            identity=SimpleNamespace(IdentityClient=object),
+            key_management=SimpleNamespace(KmsVaultClient=object),
+            vault=SimpleNamespace(VaultsClient=object),
+        ),
+    )
+    monkeypatch.setattr(common, "make_client", _make_client)
+    monkeypatch.setattr(
+        common,
+        "lookup_compartment",
+        lambda *args, **kwargs: "ocid1.compartment.oc1..test",
+    )
+    monkeypatch.setattr(
+        common,
+        "lookup_vault",
+        lambda *args, **kwargs: ("ocid1.vault.oc1..test", "https://kms.example.test"),
+    )
+    monkeypatch.setattr(common, "auto_pick_mek", _auto_pick_mek)
+    monkeypatch.setattr(common, "lookup_existing_secret", lambda *args, **kwargs: None)
+    monkeypatch.setattr(common, "list_all", lambda *args, **kwargs: [])
+    monkeypatch.setattr(mv, "_create_secret", _create_secret)
+
+    result = mv.cmd_add_secret(
+        make_args(dry_run=False, mek_name="application_mek"),
+        log,
+    )
+
+    assert result == 0
+    assert calls["mek_name"] == "application_mek"
+    assert calls["mek_ocid"] == "ocid1.key.oc1..selected"
+
+
+def test_cmd_add_secret_does_not_create_when_mek_resolution_fails(
+    mv, common, make_args, monkeypatch, log
+):
+    """An exit-6 named-MEK resolution failure prevents secret creation."""
+
+    class _VaultClient:
+        def list_secrets(self, **kwargs):  # noqa: ANN003, ANN201
+            raise AssertionError("common.list_all is stubbed")
+
+    def _make_client(*args, **kwargs):  # noqa: ANN002, ANN003
+        return _VaultClient()
+
+    def _resolution_failure(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise SystemExit(6)
+
+    def _create_secret(*args, **kwargs):  # noqa: ANN002, ANN003
+        pytest.fail("_create_secret must not run after MEK resolution fails")
+
+    monkeypatch.setattr(common, "require_dependencies", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mv, "_resolve_oci_config", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        common,
+        "verify_oci_authenticated",
+        lambda *args, **kwargs: "ocid1.tenancy.oc1..test",
+    )
+    monkeypatch.setattr(
+        mv,
+        "oci",
+        SimpleNamespace(
+            identity=SimpleNamespace(IdentityClient=object),
+            key_management=SimpleNamespace(KmsVaultClient=object),
+            vault=SimpleNamespace(VaultsClient=object),
+        ),
+    )
+    monkeypatch.setattr(common, "make_client", _make_client)
+    monkeypatch.setattr(
+        common,
+        "lookup_compartment",
+        lambda *args, **kwargs: "ocid1.compartment.oc1..test",
+    )
+    monkeypatch.setattr(
+        common,
+        "lookup_vault",
+        lambda *args, **kwargs: ("ocid1.vault.oc1..test", "https://kms.example.test"),
+    )
+    monkeypatch.setattr(common, "auto_pick_mek", _resolution_failure)
+    monkeypatch.setattr(mv, "_create_secret", _create_secret)
+
+    with pytest.raises(SystemExit) as exc:
+        mv.cmd_add_secret(
+            make_args(dry_run=False, mek_name="mek_automation"),
+            log,
+        )
+
+    assert exc.value.code == 6
 
 
 # ---------------------------------------------------------------------------
