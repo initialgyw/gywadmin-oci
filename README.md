@@ -18,8 +18,13 @@ OCI-side automation for `gywadmin-homelab`, packaged as a standalone, installabl
       - [list-secrets](#list-secrets)
       - [add-secret](#add-secret)
       - [delete-secret](#delete-secret)
+    - [manage-unseal](#manage-unseal)
+      - [Resource naming convention](#resource-naming-convention)
+      - [create](#create)
+      - [rotate](#rotate)
+      - [show](#show)
     - [update-github-secrets](#update-github-secrets)
-      - [Usage](#usage)
+      - [Usage](#usage-1)
 - [Development](#development)
 - [Exit codes](#exit-codes)
 
@@ -193,6 +198,83 @@ EOF
 % manage-vault delete-secret -n pi_root_password --days 7
 ```
 
+#### manage-unseal
+
+Manages the per-cluster OCI resources that allow an OpenBao instance to auto-unseal using OCI KMS. **Authentication is always via the admin OCI config** (`--oci-config-file`); the optional `--summary-file` / `-f` flag is only used for shared-resource discovery (compartment name/OCID and vault OCID/endpoint) and never for authentication.
+
+All subcommands require `--cluster-name`.
+
+##### Resource naming convention
+
+The raw `--cluster-name` is normalised deterministically (whitespace trimmed → lowercase → `-` replaced by `_` → consecutive `_` collapsed → leading/trailing `_` stripped) before use. Multiple inputs normalising to the same ID target the same OCI resources.
+
+For `--cluster-name k8s-01` (normalises to `k8s_01`):
+
+| Resource type | Derived name |
+|---|---|
+| KMS key | `k8s_01_openbao_unseal` |
+| IAM user | `sa_k8s_01_openbao_unseal` |
+| IAM group | `grp_k8s_01_openbao_unseal` |
+| IAM policy | `policy_k8s_01_openbao_unseal` |
+| Vault secret (private key) | `k8s_01_openbao_unseal_private_key` |
+| Vault secret (fingerprint) | `k8s_01_openbao_unseal_fingerprint` |
+| Vault secret (user OCID) | `k8s_01_openbao_unseal_user_ocid` |
+
+The IAM policy contains **exactly one** statement, scoped to the per-cluster KMS key only:
+
+```
+Allow group grp_<id>_openbao_unseal to use keys in compartment <compartment>
+  where target.key.id = '<key_ocid>'
+```
+
+##### create
+
+Provisions all per-cluster resources and credentials. Idempotent: if all three Vault secrets already exist, the stored private key derives the stored fingerprint, that fingerprint matches a live API key, and the stored user OCID matches the derived user, the command exits 0 with no mutations.
+
+```bash
+manage-unseal create --cluster-name k8s-01
+
+# With an existing summary for faster OCID discovery (no compartment/vault lookup):
+manage-unseal create --cluster-name k8s-01 -f output/initialize-oci-summary.json
+
+# Dry run (no mutations):
+manage-unseal create --cluster-name k8s-01 --dry-run -v
+```
+
+If the unseal user already has 3 API keys (OCI maximum), the command exits with code 5. Pass `--delete-old-api-key` to delete the oldest non-active spare key and make room. The currently registered fingerprint is never deleted automatically.
+
+##### rotate
+
+Always generates fresh RSA-4096 key material and pushes new Vault secret versions. IAM infrastructure is verified first (same as `create`).
+
+```bash
+manage-unseal rotate --cluster-name k8s-01
+
+# Make room at the 3-key cap by removing the oldest non-active spare:
+manage-unseal rotate --cluster-name k8s-01 --delete-old-api-key
+```
+
+> **Key-rotation lifecycle note:** The three Vault secrets cannot be updated atomically. After a successful `rotate`, the **previous API key is retained** in OCI IAM — it is intentionally not deleted automatically because consumers (e.g. OpenBao instances) may still hold active sessions using it. The recommended workflow is:
+>
+> 1. Run `manage-unseal rotate`.
+> 2. Roll out the new secret generation to all consumers and confirm they are using the new credential.
+> 3. Once all consumers have rolled over, manually remove the old API key via `oci iam user api-key delete` or the OCI Console.
+>
+> Use `manage-unseal show | jq .provisioning_complete` to confirm all conditions (valid private key, matching fingerprint, live API key, active resources) before and after a rotation.
+
+##### show
+
+Read-only JSON status report. Contains derived names, discovered OCIDs/lifecycle states, the registered fingerprint (never the private key), a `matches_fingerprint` boolean (whether the stored private key derives the same fingerprint as the stored fingerprint secret), membership state, and an overall `provisioning_complete` flag.
+
+`provisioning_complete` is `true` only when: the unseal KMS key is ENABLED with the expected AES-256 SOFTWARE shape, the IAM user, group, membership, and policy are ACTIVE, the policy is exactly correctly scoped (using the authoritative compartment name from `--summary-file` or `--compartment`), all three secrets are ACTIVE, the stored user OCID matches, the stored fingerprint is a live API key, and the private key derives the same fingerprint.
+
+```bash
+manage-unseal show --cluster-name k8s-01
+manage-unseal show --cluster-name k8s-01 | jq .provisioning_complete
+```
+
+---
+
 #### update-github-secrets
 
 **Note:** You must pass your GitHub token to the container as an environment variable using `-e GH_TOKEN=<your_token>`.
@@ -241,11 +323,11 @@ pip install -e . -r py-requirements-dev.txt
 |---|---|---|
 | `0` | Success (or clean dry-run, or idempotent no-op). | All |
 | `1` | Generic OCI / polling failure; or one or more secrets failed to set. | All |
-| `2` | Required Python deps missing (`initialize-oci`, `manage-vault`); `gh` CLI not found (`update-github-secrets`). | All |
-| `3` | OCI config file missing or invalid (`initialize-oci`, `manage-vault`); summary file missing/unreadable/invalid (`manage-vault` with `--summary-file`, `update-github-secrets`). | All |
-| `4` | OCI authentication preflight failed (`initialize-oci`, `manage-vault`); `gh` auth or repo preflight failed (`update-github-secrets`). | All |
-| `5` | IAM user already has the OCI maximum (3) API keys (`initialize-oci`); compartment, vault, or secret not found (`manage-vault`). | `initialize-oci`, `manage-vault` |
-| `6` | Vault has zero or multiple `ENABLED` master encryption keys (auto-pick failed). | `add-secret` |
+| `2` | Required Python deps missing (`initialize-oci`, `manage-vault`, `manage-unseal`); `gh` CLI not found (`update-github-secrets`). | All |
+| `3` | OCI config file missing or invalid (`initialize-oci`, `manage-vault`, `manage-unseal`); summary file missing/unreadable/invalid (`manage-vault` with `--summary-file`, `manage-unseal` with `--summary-file`, `update-github-secrets`). | All |
+| `4` | OCI authentication preflight failed (`initialize-oci`, `manage-vault`, `manage-unseal`); `gh` auth or repo preflight failed (`update-github-secrets`). | All |
+| `5` | IAM user already has the OCI maximum (3) API keys (`initialize-oci`, `manage-unseal`); compartment, vault, or secret not found (`manage-vault`, `manage-unseal`). | `initialize-oci`, `manage-vault`, `manage-unseal` |
+| `6` | Vault has zero or multiple `ENABLED` master encryption keys (auto-pick failed) (`add-secret`); invalid `--cluster-name` after normalisation (`manage-unseal`). | `add-secret`, `manage-unseal` |
 | `7` | Permission denied on secret create/update. | `add-secret` |
 | `8` | Secret name held by a `*_DELETION`-state resource. | `add-secret` |
 | `9` | Bad value-source argument: empty stdin with `--secret-value -`, non-TTY stdin without `--secret-value`, interactive entry aborted, mismatched confirmations after 3 attempts, or empty interactive value. | `add-secret` |

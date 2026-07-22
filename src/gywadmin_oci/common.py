@@ -32,6 +32,16 @@ Public surface
 * :func:`lookup_vault` — find a KMS vault OCID + management endpoint by name.
 * :func:`auto_pick_mek` — auto-discover the single ENABLED MEK in a vault.
 * :func:`lookup_existing_secret` — find an existing secret by name in a vault.
+* :func:`compute_oci_fingerprint` — colon-separated MD5 fingerprint for an
+  OCI API key public-key DER blob.
+* :func:`generate_unencrypted_rsa_api_key` — generate an RSA keypair with no
+  private-key encryption (``serialization.NoEncryption()``); for use with
+  secret-manager-backed credentials (manage-unseal).
+* :func:`fingerprint_from_private_pem` — validate an unencrypted RSA private
+  key and derive its OCI API-key fingerprint without exposing key material.
+* :func:`fingerprint_from_private_pem` — derive the OCI fingerprint from an
+  unencrypted RSA private key PEM; raises ``ValueError`` for encrypted /
+  non-RSA / malformed keys. Never logs key material.
 * :func:`format_oci_time` — RFC 3339 UTC timestamp with ``Z`` suffix.
 * :func:`parse_oci_time` — strict RFC 3339 parser; raises ``ValueError``.
 * :func:`prompt_destructive_confirm` — TTY / ``--yes`` / non-TTY confirmation
@@ -43,6 +53,7 @@ Public surface
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -1190,6 +1201,139 @@ def auto_pick_mek(
     mek = enabled[0]
     log.debug("auto-selected MEK '%s' (%s)", mek.display_name, mek.id)
     return mek.id, mek.display_name
+
+
+# ---------------------------------------------------------------------------
+# API key generation helpers (shared by initialize-oci and manage-unseal)
+# ---------------------------------------------------------------------------
+def compute_oci_fingerprint(public_key_der: bytes) -> str:
+    """Compute the OCI API key fingerprint for a DER-encoded public key.
+
+    OCI defines the fingerprint as the colon-separated MD5 hex digest of the
+    DER-encoded ``SubjectPublicKeyInfo`` bytes (matching
+    ``openssl rsa -pubout -outform DER | openssl md5 -c``).
+
+    Args:
+        public_key_der: DER-encoded ``SubjectPublicKeyInfo`` bytes.
+
+    Returns:
+        Colon-separated 32-character lowercase hex fingerprint, e.g.
+        ``"ab:cd:ef:01:23:45:67:89:ab:cd:ef:01:23:45:67:89"``.
+    """
+    digest = hashlib.md5(public_key_der).hexdigest()
+    return ":".join(digest[i : i + 2] for i in range(0, len(digest), 2))
+
+
+def generate_unencrypted_rsa_api_key(key_bits: int = 4096) -> Dict[str, Any]:
+    """Generate an RSA keypair with **no** encryption on the private half.
+
+    Unlike the encrypted variant used by ``initialize-oci``, this produces a
+    bare PKCS#8 PEM (``serialization.NoEncryption()``) for use cases where
+    the private key is immediately stored in a secret manager (e.g. OCI Vault)
+    and must never touch disk in cleartext.
+
+    The private key is returned as a string; the caller is responsible for
+    ensuring it is never logged, printed, or written to disk.
+
+    Args:
+        key_bits: RSA modulus size in bits (default 4096, matching OCI maximum).
+
+    Returns:
+        Dict with keys:
+
+        * ``"private_pem"`` (``str``) — unencrypted PKCS#8 PEM.
+        * ``"public_pem"`` (``str``) — SubjectPublicKeyInfo PEM.
+        * ``"public_der"`` (``bytes``) — SubjectPublicKeyInfo DER.
+        * ``"fingerprint"`` (``str``) — colon-separated MD5 fingerprint.
+
+    Raises:
+        RuntimeError: If the ``cryptography`` package is not installed.
+            Call :func:`require_dependencies` with ``need_cryptography=True``
+            before invoking this function.
+    """
+    if not HAS_CRYPTO:  # pragma: no cover — runtime guard; tests run with crypto
+        raise RuntimeError(
+            "cryptography package is required for API key generation. "
+            "Install with: pip install cryptography"
+        )
+    private_key = rsa.generate_private_key(  # type: ignore[union-attr]
+        public_exponent=65537,
+        key_size=key_bits,
+    )
+    public_key = private_key.public_key()
+
+    private_pem_bytes: bytes = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,  # type: ignore[union-attr]
+        format=serialization.PrivateFormat.PKCS8,  # type: ignore[union-attr]
+        encryption_algorithm=serialization.NoEncryption(),  # type: ignore[union-attr]
+    )
+    public_pem_bytes: bytes = public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,  # type: ignore[union-attr]
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,  # type: ignore[union-attr]
+    )
+    public_der_bytes: bytes = public_key.public_bytes(
+        encoding=serialization.Encoding.DER,  # type: ignore[union-attr]
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,  # type: ignore[union-attr]
+    )
+
+    return {
+        "private_pem": private_pem_bytes.decode("utf-8"),
+        "public_pem": public_pem_bytes.decode("utf-8"),
+        "public_der": public_der_bytes,
+        "fingerprint": compute_oci_fingerprint(public_der_bytes),
+    }
+
+
+def fingerprint_from_private_pem(pem: str) -> str:
+    """Derive the OCI API key fingerprint from an unencrypted RSA private key.
+
+    Accepts only PKCS#8 or PKCS#1 PEM-encoded RSA private keys with **no**
+    passphrase. Rejects passphrase-encrypted keys, non-RSA algorithms, and
+    malformed input. Private key material is **never** logged.
+
+    Args:
+        pem: PEM-encoded private key string (PKCS#8 or PKCS#1, no passphrase).
+
+    Returns:
+        Colon-separated MD5 fingerprint of the corresponding DER-encoded
+        ``SubjectPublicKeyInfo`` public key, consistent with
+        :func:`compute_oci_fingerprint`.
+
+    Raises:
+        RuntimeError: If the ``cryptography`` package is not installed.
+        ValueError: If the key is passphrase-encrypted, is not an RSA key,
+            or the PEM cannot be parsed.
+    """
+    if not HAS_CRYPTO:
+        raise RuntimeError(
+            "cryptography package is required for private-key fingerprint "
+            "derivation. Install with: pip install cryptography"
+        )
+    raw: bytes = pem.encode("utf-8") if isinstance(pem, str) else pem
+    try:
+        private_key = serialization.load_pem_private_key(raw, password=None)  # type: ignore[union-attr]
+    except TypeError as exc:
+        # cryptography raises TypeError when the key needs a passphrase but
+        # none was supplied.
+        raise ValueError(
+            "Private key PEM is passphrase-encrypted; "
+            "manage-unseal requires an unencrypted (NoEncryption) private key."
+        ) from exc
+    except Exception as exc:
+        raise ValueError("Cannot parse private key PEM.") from exc
+
+    if not isinstance(private_key, rsa.RSAPrivateKey):  # type: ignore[union-attr]
+        raise ValueError(
+            f"Private key is not RSA (got {type(private_key).__name__}); "
+            "manage-unseal requires an RSA private key."
+        )
+
+    public_key = private_key.public_key()
+    public_der: bytes = public_key.public_bytes(
+        encoding=serialization.Encoding.DER,  # type: ignore[union-attr]
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,  # type: ignore[union-attr]
+    )
+    return compute_oci_fingerprint(public_der)
 
 
 def lookup_existing_secret(

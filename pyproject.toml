@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gywadmin-oci"
-version = "0.2.4"
+version = "0.3.0"
 description = "OCI Vault + initialization helpers for gywadmin-homelab"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -26,3 +26,4 @@ Repository = "https://github.com/initialgyw/gywadmin-oci"
 manage-vault = "gywadmin_oci.manage_vault:main"
 initialize-oci = "gywadmin_oci.initialize_oci:main"
 update-github-secrets = "gywadmin_oci.update_github_secrets:main"
+manage-unseal = "gywadmin_oci.manage_unseal:main"
