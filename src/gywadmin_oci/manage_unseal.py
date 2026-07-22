@@ -8,14 +8,15 @@ allow an OpenBao instance to auto-unseal using OCI KMS:
     Provision the per-cluster AES-256 SOFTWARE KMS unseal key, IAM user,
     group, user-group membership, and an exactly-scoped IAM policy.  Then
     issue an unencrypted RSA-4096 API key for the unseal user and store the
-    private key, fingerprint, and user OCID as three separate Vault secrets
-    (encrypted under the shared MEK).  **Idempotent**: if all three secrets
-    already exist and the fingerprint matches a current OCI API key, the
-    command is a no-op (exit 0).
+    private key, fingerprint, and user OCID as one JSON Vault secret
+    (encrypted under the shared MEK). **Idempotent**: if that credential
+    secret is valid and the fingerprint matches a current OCI API key, the
+    command is a no-op (exit 0). A valid legacy three-secret credential is
+    consolidated without regenerating the API key.
 
 ``rotate``
     Always generate fresh key material regardless of existing state and
-    push new versions of the three Vault secrets.  IAM infrastructure is
+    push a new version of the JSON Vault credential secret. IAM infrastructure is
     verified/ensured first, exactly as ``create`` does.
 
 ``show``
@@ -69,9 +70,7 @@ Resource-name convention (example: cluster ``k8s-01`` → id ``k8s_01``)
 * IAM user           ``sa_k8s_01_openbao_unseal``
 * IAM group          ``grp_k8s_01_openbao_unseal``
 * IAM policy         ``policy_k8s_01_openbao_unseal``
-* Vault secret       ``k8s_01_openbao_unseal_private_key``
-* Vault secret       ``k8s_01_openbao_unseal_fingerprint``
-* Vault secret       ``k8s_01_openbao_unseal_user_ocid``
+* Vault secret       ``k8s_01_openbao_unseal_credential``
 
 Least-privilege policy
 -----------------------
@@ -219,9 +218,7 @@ class UnsealNames:
     user: str
     group: str
     policy: str
-    secret_private_key: str
-    secret_fingerprint: str
-    secret_user_ocid: str
+    secret_credential: str
 
 
 def derive_names(cluster_id: str) -> UnsealNames:
@@ -233,9 +230,7 @@ def derive_names(cluster_id: str) -> UnsealNames:
         user               sa_k8s_01_openbao_unseal
         group              grp_k8s_01_openbao_unseal
         policy             policy_k8s_01_openbao_unseal
-        secret_private_key k8s_01_openbao_unseal_private_key
-        secret_fingerprint k8s_01_openbao_unseal_fingerprint
-        secret_user_ocid   k8s_01_openbao_unseal_user_ocid
+        secret_credential  k8s_01_openbao_unseal_credential
 
     Args:
         cluster_id: Already-normalised cluster identifier from
@@ -251,9 +246,7 @@ def derive_names(cluster_id: str) -> UnsealNames:
         user=f"sa_{base}",
         group=f"grp_{base}",
         policy=f"policy_{base}",
-        secret_private_key=f"{base}_private_key",
-        secret_fingerprint=f"{base}_fingerprint",
-        secret_user_ocid=f"{base}_user_ocid",
+        secret_credential=f"{base}_credential",
     )
 
 
@@ -298,7 +291,7 @@ def _build_common_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MEK_NAME,
         help=(
             "Display name of the master encryption key used to encrypt the "
-            "three Vault secrets. (default: %(default)s)"
+            "JSON Vault credential secret. (default: %(default)s)"
         ),
     )
     p.add_argument(
@@ -415,10 +408,10 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
             "Creates an AES-256 SOFTWARE KMS unseal key, an IAM user, group, "
             "membership, and an exactly-scoped IAM policy. Then issues an "
             "unencrypted RSA-4096 API key and stores the private key, "
-            "fingerprint, and user OCID as three Vault secrets (encrypted "
-            "under --mek-name). Idempotent: if all three secrets exist and the "
-            "fingerprint matches a live API key, the command exits 0 without "
-            "any mutations."
+            "fingerprint, and user OCID in one JSON Vault secret (encrypted "
+            "under --mek-name). Idempotent: if the credential secret is valid "
+            "and its fingerprint matches a live API key, the command exits 0 "
+            "without any mutations."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -430,8 +423,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         parents=[common_parser],
         help="Rotate credentials: generate fresh API key and update Vault secrets.",
         description=(
-            "Always generate fresh RSA-4096 API key material and push new "
-            "versions of the three Vault secrets. IAM infrastructure is "
+            "Always generate fresh RSA-4096 API key material and push a new "
+            "version of the JSON Vault credential secret. IAM infrastructure is "
             "verified/ensured first (same as create). API-key cap: exit 5 if "
             "the user already has 3 keys and --delete-old-api-key is not set. "
             "With --delete-old-api-key: make room by removing the oldest "
@@ -1348,7 +1341,7 @@ def _require_secret_uses_mek(
     raise SystemExit(1)
 
 
-def _require_contract_secrets_use_mek(
+def _require_credential_secret_uses_mek(
     vaults_client: Any,
     *,
     compartment_ocid: str,
@@ -1357,25 +1350,20 @@ def _require_contract_secrets_use_mek(
     mek_ocid: str,
     log: logging.Logger,
 ) -> None:
-    """Verify every existing credential-contract secret uses the selected MEK."""
-    for secret_name in (
-        names.secret_private_key,
-        names.secret_fingerprint,
-        names.secret_user_ocid,
-    ):
-        existing = common.lookup_existing_secret(
-            vaults_client,
-            compartment_ocid,
-            vault_ocid,
-            secret_name,
-            log,
-        )
-        _require_secret_uses_mek(
-            existing,
-            secret_name=secret_name,
-            mek_ocid=mek_ocid,
-            log=log,
-        )
+    """Verify the existing consolidated credential secret uses the MEK."""
+    existing = common.lookup_existing_secret(
+        vaults_client,
+        compartment_ocid,
+        vault_ocid,
+        names.secret_credential,
+        log,
+    )
+    _require_secret_uses_mek(
+        existing,
+        secret_name=names.secret_credential,
+        mek_ocid=mek_ocid,
+        log=log,
+    )
 
 
 def _upsert_vault_secret(
@@ -1401,8 +1389,8 @@ def _upsert_vault_secret(
         vault_ocid: Vault OCID.
         mek_ocid: MEK OCID used to encrypt the secret.
         secret_name: Secret display name.
-        secret_value_bytes: Raw secret bytes (private key PEM, fingerprint
-            string, or user OCID string, all UTF-8).
+        secret_value_bytes: Raw UTF-8 JSON credential bytes. The private key
+            contained in the JSON payload is never logged.
         wait_seconds: Max polling time for the secret to reach ACTIVE.
         interval_seconds: Polling interval.
         log: Active logger.
@@ -1519,6 +1507,214 @@ def _read_secret_value(
         return None
 
 
+_CREDENTIAL_FIELDS = ("private_key", "fingerprint", "user_ocid")
+
+
+def _legacy_credential_secret_names(names: UnsealNames) -> Tuple[str, str, str]:
+    """Return the former three-secret contract for one-time consolidation."""
+    base = f"{names.cluster_id}_openbao_unseal"
+    return (f"{base}_private_key", f"{base}_fingerprint", f"{base}_user_ocid")
+
+
+def _serialize_credential_payload(
+    private_key: str, fingerprint: str, user_ocid: str
+) -> bytes:
+    """Return the canonical JSON payload stored in the credential secret."""
+    return json.dumps(
+        {
+            "private_key": private_key,
+            "fingerprint": fingerprint,
+            "user_ocid": user_ocid,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _parse_credential_payload(
+    raw_value: Optional[str], *, secret_name: str, log: logging.Logger
+) -> Optional[Dict[str, str]]:
+    """Parse and validate the non-sensitive shape of a credential JSON payload."""
+    if raw_value is None:
+        return None
+
+    try:
+        payload = json.loads(raw_value)
+    except (json.JSONDecodeError, TypeError):
+        log.debug("Credential secret '%s' does not contain valid JSON.", secret_name)
+        return None
+
+    if not isinstance(payload, dict):
+        log.debug("Credential secret '%s' JSON value is not an object.", secret_name)
+        return None
+
+    credential: Dict[str, str] = {}
+    for field in _CREDENTIAL_FIELDS:
+        value = payload.get(field)
+        if not isinstance(value, str) or not value:
+            log.debug(
+                "Credential secret '%s' has a missing or invalid '%s' field.",
+                secret_name,
+                field,
+            )
+            return None
+        credential[field] = value
+    return credential
+
+
+def _read_credential_payload(
+    vaults_client: Any,
+    secrets_client: Any,
+    compartment_ocid: str,
+    vault_ocid: str,
+    names: UnsealNames,
+    log: logging.Logger,
+) -> Optional[Dict[str, str]]:
+    """Read and parse the consolidated credential secret without logging its key."""
+    raw_value = _read_secret_value(
+        vaults_client,
+        secrets_client,
+        compartment_ocid,
+        vault_ocid,
+        names.secret_credential,
+        log,
+    )
+    return _parse_credential_payload(
+        raw_value,
+        secret_name=names.secret_credential,
+        log=log,
+    )
+
+
+def _read_legacy_credential_payload(
+    vaults_client: Any,
+    secrets_client: Any,
+    compartment_ocid: str,
+    vault_ocid: str,
+    names: UnsealNames,
+    log: logging.Logger,
+) -> Optional[Dict[str, str]]:
+    """Read the former three-secret contract when all entries remain ACTIVE."""
+    private_key_name, fingerprint_name, user_ocid_name = (
+        _legacy_credential_secret_names(names)
+    )
+    for secret_name in (private_key_name, fingerprint_name, user_ocid_name):
+        secret = common.lookup_existing_secret(
+            vaults_client,
+            compartment_ocid,
+            vault_ocid,
+            secret_name,
+            log,
+        )
+        if secret is None or getattr(secret, "lifecycle_state", None) != "ACTIVE":
+            return None
+
+    private_key = _read_secret_value(
+        vaults_client,
+        secrets_client,
+        compartment_ocid,
+        vault_ocid,
+        private_key_name,
+        log,
+    )
+    fingerprint = _read_secret_value(
+        vaults_client,
+        secrets_client,
+        compartment_ocid,
+        vault_ocid,
+        fingerprint_name,
+        log,
+    )
+    user_ocid = _read_secret_value(
+        vaults_client,
+        secrets_client,
+        compartment_ocid,
+        vault_ocid,
+        user_ocid_name,
+        log,
+    )
+    if not private_key or not fingerprint or not user_ocid:
+        return None
+    return {
+        "private_key": private_key,
+        "fingerprint": fingerprint,
+        "user_ocid": user_ocid,
+    }
+
+
+def _require_legacy_credential_secrets_use_mek(
+    vaults_client: Any,
+    *,
+    compartment_ocid: str,
+    vault_ocid: str,
+    names: UnsealNames,
+    mek_ocid: str,
+    log: logging.Logger,
+) -> None:
+    """Fail closed before consolidating legacy secrets encrypted by another key."""
+    for secret_name in _legacy_credential_secret_names(names):
+        existing = common.lookup_existing_secret(
+            vaults_client,
+            compartment_ocid,
+            vault_ocid,
+            secret_name,
+            log,
+        )
+        _require_secret_uses_mek(
+            existing,
+            secret_name=secret_name,
+            mek_ocid=mek_ocid,
+            log=log,
+        )
+
+
+def _credential_payload_is_valid(
+    credential: Dict[str, str],
+    *,
+    identity_client: Any,
+    user_ocid: str,
+    source_name: str,
+    log: logging.Logger,
+) -> bool:
+    """Verify a parsed credential payload is internally consistent and live."""
+    try:
+        derived_fingerprint = common.fingerprint_from_private_pem(
+            credential["private_key"]
+        )
+    except (ValueError, RuntimeError):
+        log.debug(
+            "Credential '%s' has an invalid private key; create is not complete.",
+            source_name,
+        )
+        return False
+
+    if derived_fingerprint != credential["fingerprint"]:
+        log.debug(
+            "Credential '%s' private key does not match its fingerprint; "
+            "create is not complete.",
+            source_name,
+        )
+        return False
+
+    existing_keys = common.list_all(identity_client.list_api_keys, user_id=user_ocid)
+    active_fingerprints = {key.fingerprint for key in existing_keys}
+    if credential["fingerprint"] not in active_fingerprints:
+        log.debug(
+            "Credential '%s' fingerprint is not a live API key; create is not complete.",
+            source_name,
+        )
+        return False
+
+    if credential["user_ocid"] != user_ocid:
+        log.debug(
+            "Credential '%s' user OCID does not match the unseal user; "
+            "create is not complete.",
+            source_name,
+        )
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Idempotency check (create)
 # ---------------------------------------------------------------------------
@@ -1534,15 +1730,15 @@ def _check_create_complete(
 ) -> bool:
     """Return ``True`` only when ``create`` is fully provisioned and valid.
 
-    All five conditions must hold simultaneously:
+    All four conditions must hold simultaneously:
 
-    1. All three secrets (``private_key``, ``fingerprint``, ``user_ocid``)
-       exist and are ACTIVE.
-    2. The private-key secret contains a valid **unencrypted RSA** key.
-    3. The OCI fingerprint derived from that private key matches the value
-       stored in the fingerprint secret.
-    4. The stored fingerprint corresponds to a live API key on the unseal user.
-    5. The stored user OCID matches the actual (derived) user OCID.
+    1. The JSON credential secret exists and is ACTIVE.
+    2. It contains non-empty ``private_key``, ``fingerprint``, and ``user_ocid``
+       string fields.
+    3. The private key is a valid **unencrypted RSA** key whose derived OCI
+       fingerprint matches the stored fingerprint.
+    4. The stored fingerprint is a live API key on the unseal user and the
+       stored user OCID matches that user.
 
     Private key material is **never** logged.
 
@@ -1559,106 +1755,37 @@ def _check_create_complete(
     Returns:
         ``True`` if provisioning is complete and valid; ``False`` otherwise.
     """
-    # Check all three secrets exist.
-    s_fp = common.lookup_existing_secret(
-        vaults_client, compartment_ocid, vault_ocid, names.secret_fingerprint, log
+    secret = common.lookup_existing_secret(
+        vaults_client,
+        compartment_ocid,
+        vault_ocid,
+        names.secret_credential,
+        log,
     )
-    s_pk = common.lookup_existing_secret(
-        vaults_client, compartment_ocid, vault_ocid, names.secret_private_key, log
-    )
-    s_uid = common.lookup_existing_secret(
-        vaults_client, compartment_ocid, vault_ocid, names.secret_user_ocid, log
-    )
-
-    secret_states = tuple(
-        getattr(secret, "lifecycle_state", None) for secret in (s_fp, s_pk, s_uid)
-    )
-    if not all(
-        secret is not None and state == "ACTIVE"
-        for secret, state in zip((s_fp, s_pk, s_uid), secret_states)
-    ):
+    if secret is None or getattr(secret, "lifecycle_state", None) != "ACTIVE":
         log.debug(
-            "Not all 3 secrets are ACTIVE (fingerprint=%s, private_key=%s, "
-            "user_ocid=%s; states=%s); create is not complete.",
-            bool(s_fp),
-            bool(s_pk),
-            bool(s_uid),
-            secret_states,
+            "Credential secret '%s' is not ACTIVE; create is not complete.",
+            names.secret_credential,
         )
         return False
 
-    # Read fingerprint secret value.
-    fp_value = _read_secret_value(
+    credential = _read_credential_payload(
         vaults_client,
         secrets_client,
         compartment_ocid,
         vault_ocid,
-        names.secret_fingerprint,
+        names,
         log,
     )
-    if not fp_value:
-        log.debug("Cannot read fingerprint secret; create is not complete.")
+    if credential is None:
         return False
-
-    # Read private-key secret value and validate it is an unencrypted RSA key
-    # whose derived fingerprint matches the stored fingerprint.
-    # The raw PEM is intentionally not logged.
-    pk_value = _read_secret_value(
-        vaults_client,
-        secrets_client,
-        compartment_ocid,
-        vault_ocid,
-        names.secret_private_key,
-        log,
+    return _credential_payload_is_valid(
+        credential,
+        identity_client=identity_client,
+        user_ocid=user_ocid,
+        source_name=names.secret_credential,
+        log=log,
     )
-    if not pk_value:
-        log.debug("Cannot read private_key secret; create is not complete.")
-        return False
-    try:
-        derived_fp = common.fingerprint_from_private_pem(pk_value)
-    except (ValueError, RuntimeError):
-        log.debug(
-            "Private key secret is invalid (encrypted / non-RSA / malformed); "
-            "create is not complete."
-        )
-        return False
-    if derived_fp != fp_value:
-        log.debug(
-            "Private key fingerprint does not match stored fingerprint; "
-            "create is not complete."
-        )
-        return False
-
-    # Read user_ocid secret value.
-    uid_value = _read_secret_value(
-        vaults_client,
-        secrets_client,
-        compartment_ocid,
-        vault_ocid,
-        names.secret_user_ocid,
-        log,
-    )
-    if not uid_value:
-        log.debug("Cannot read user_ocid secret; create is not complete.")
-        return False
-
-    # Stored fingerprint must match a live API key on the user.
-    existing_keys = common.list_all(identity_client.list_api_keys, user_id=user_ocid)
-    active_fps = {k.fingerprint for k in existing_keys}
-    if fp_value not in active_fps:
-        log.debug(
-            "Fingerprint from secret not found in user's live API keys; create is not complete."
-        )
-        return False
-
-    # Stored user OCID must match the actual user OCID.
-    if uid_value != user_ocid:
-        log.debug(
-            "user_ocid secret value does not match actual user OCID; create is not complete."
-        )
-        return False
-
-    return True
 
 
 # ---------------------------------------------------------------------------
@@ -1787,7 +1914,7 @@ def cmd_create(args: argparse.Namespace, log: logging.Logger) -> int:
 
     Provisions all per-cluster unseal resources (KMS key, IAM user/group/
     membership/policy) and, when not already complete, issues a new API key
-    and stores the three Vault secrets.
+    and stores one JSON Vault credential secret.
 
     Args:
         args: Parsed CLI arguments.
@@ -1839,7 +1966,7 @@ def cmd_create(args: argparse.Namespace, log: logging.Logger) -> int:
         mek_ocid = _require_mek(
             config, compartment_ocid, management_endpoint, args.mek_name, log
         )
-        _require_contract_secrets_use_mek(
+        _require_credential_secret_uses_mek(
             vaults_client,
             compartment_ocid=compartment_ocid,
             vault_ocid=vault_ocid,
@@ -1920,29 +2047,107 @@ def cmd_create(args: argparse.Namespace, log: logging.Logger) -> int:
                 )
                 return 0
 
+        legacy_credential: Optional[Dict[str, str]] = None
+        if not common.is_dry_run_ocid(user_ocid):
+            legacy_credential = _read_legacy_credential_payload(
+                vaults_client,
+                secrets_client,
+                compartment_ocid,
+                vault_ocid,
+                names,
+                log,
+            )
+            if legacy_credential is not None and _credential_payload_is_valid(
+                legacy_credential,
+                identity_client=identity_client,
+                user_ocid=user_ocid,
+                source_name="legacy credential secrets",
+                log=log,
+            ):
+                _require_legacy_credential_secrets_use_mek(
+                    vaults_client,
+                    compartment_ocid=compartment_ocid,
+                    vault_ocid=vault_ocid,
+                    names=names,
+                    mek_ocid=mek_ocid,
+                    log=log,
+                )
+                if args.dry_run:
+                    log.info(
+                        "[DRY-RUN] would consolidate the legacy credential secrets "
+                        "into Vault secret '%s'.",
+                        names.secret_credential,
+                    )
+                    log.info("manage-unseal create complete (dry_run=True)")
+                    return 0
+
+                _upsert_vault_secret(
+                    vaults_client,
+                    compartment_ocid=compartment_ocid,
+                    vault_ocid=vault_ocid,
+                    mek_ocid=mek_ocid,
+                    secret_name=names.secret_credential,
+                    secret_value_bytes=_serialize_credential_payload(
+                        legacy_credential["private_key"],
+                        legacy_credential["fingerprint"],
+                        legacy_credential["user_ocid"],
+                    ),
+                    wait_seconds=args.wait_seconds,
+                    interval_seconds=args.interval_seconds,
+                    log=log,
+                )
+                if not _check_create_complete(
+                    vaults_client,
+                    secrets_client,
+                    identity_client,
+                    compartment_ocid,
+                    vault_ocid,
+                    names,
+                    user_ocid,
+                    log,
+                ):
+                    log.error(
+                        "Legacy credential consolidation failed validation. "
+                        "The legacy secrets were left unchanged."
+                    )
+                    return 1
+                log.warning(
+                    "Consolidated legacy credentials into '%s'. The three legacy "
+                    "secrets were intentionally retained; remove them only after "
+                    "OpenBao has rolled over to the consolidated credential.",
+                    names.secret_credential,
+                )
+                return 0
+
         if args.dry_run:
             log.info(
                 "[DRY-RUN] would generate RSA-%d API key for user '%s', upload "
-                "to OCI, and store 3 Vault secrets "
-                "(%s, %s, %s)",
+                "to OCI, and store JSON credential secret '%s'.",
                 RSA_KEY_BITS,
                 names.user,
-                names.secret_private_key,
-                names.secret_fingerprint,
-                names.secret_user_ocid,
+                names.secret_credential,
             )
             log.info("manage-unseal create complete (dry_run=True)")
             return 0
 
         # A partial/invalid credential set may still be deployed. Preserve its
         # registered fingerprint while making room for a repair credential.
-        protected_fingerprint = _read_secret_value(
+        credential = _read_credential_payload(
             vaults_client,
             secrets_client,
             compartment_ocid,
             vault_ocid,
-            names.secret_fingerprint,
+            names,
             log,
+        )
+        protected_fingerprint = (
+            credential["fingerprint"]
+            if credential is not None
+            else (
+                legacy_credential["fingerprint"]
+                if legacy_credential is not None
+                else None
+            )
         )
 
         # Real run: cap check → generate → upload → store secrets.
@@ -1964,30 +2169,12 @@ def cmd_create(args: argparse.Namespace, log: logging.Logger) -> int:
             compartment_ocid=compartment_ocid,
             vault_ocid=vault_ocid,
             mek_ocid=mek_ocid,
-            secret_name=names.secret_private_key,
-            secret_value_bytes=keypair["private_pem"].encode("utf-8"),
-            wait_seconds=args.wait_seconds,
-            interval_seconds=args.interval_seconds,
-            log=log,
-        )
-        _upsert_vault_secret(
-            vaults_client,
-            compartment_ocid=compartment_ocid,
-            vault_ocid=vault_ocid,
-            mek_ocid=mek_ocid,
-            secret_name=names.secret_fingerprint,
-            secret_value_bytes=keypair["fingerprint"].encode("utf-8"),
-            wait_seconds=args.wait_seconds,
-            interval_seconds=args.interval_seconds,
-            log=log,
-        )
-        _upsert_vault_secret(
-            vaults_client,
-            compartment_ocid=compartment_ocid,
-            vault_ocid=vault_ocid,
-            mek_ocid=mek_ocid,
-            secret_name=names.secret_user_ocid,
-            secret_value_bytes=user_ocid.encode("utf-8"),
+            secret_name=names.secret_credential,
+            secret_value_bytes=_serialize_credential_payload(
+                keypair["private_pem"],
+                keypair["fingerprint"],
+                user_ocid,
+            ),
             wait_seconds=args.wait_seconds,
             interval_seconds=args.interval_seconds,
             log=log,
@@ -2007,8 +2194,8 @@ def cmd_create(args: argparse.Namespace, log: logging.Logger) -> int:
             log,
         ):
             log.error(
-                "Post-write validation failed: stored secrets do not form a "
-                "consistent credential set. Inspect with 'manage-unseal show'. "
+                "Post-write validation failed: the stored credential does not form "
+                "a consistent set. Inspect with 'manage-unseal show'. "
                 "No prior key was deleted."
             )
             return 1
@@ -2032,8 +2219,8 @@ def cmd_create(args: argparse.Namespace, log: logging.Logger) -> int:
 def cmd_rotate(args: argparse.Namespace, log: logging.Logger) -> int:
     """Implement the ``rotate`` subcommand.
 
-    Always generates fresh RSA-4096 API key material and pushes new versions
-    of all three Vault secrets, regardless of existing state.
+    Always generates fresh RSA-4096 key material and pushes a new version of
+    the JSON Vault credential secret, regardless of existing state.
 
     Args:
         args: Parsed CLI arguments.
@@ -2084,7 +2271,7 @@ def cmd_rotate(args: argparse.Namespace, log: logging.Logger) -> int:
         mek_ocid = _require_mek(
             config, compartment_ocid, management_endpoint, args.mek_name, log
         )
-        _require_contract_secrets_use_mek(
+        _require_credential_secret_uses_mek(
             vaults_client,
             compartment_ocid=compartment_ocid,
             vault_ocid=vault_ocid,
@@ -2150,13 +2337,25 @@ def cmd_rotate(args: argparse.Namespace, log: logging.Logger) -> int:
         secrets_client = common.make_client(oci.secrets.SecretsClient, config)
         old_fingerprint: Optional[str] = None
         if not common.is_dry_run_ocid(user_ocid):
-            old_fingerprint = _read_secret_value(
+            credential = _read_credential_payload(
                 vaults_client,
                 secrets_client,
                 compartment_ocid,
                 vault_ocid,
-                names.secret_fingerprint,
+                names,
                 log,
+            )
+            if credential is None:
+                credential = _read_legacy_credential_payload(
+                    vaults_client,
+                    secrets_client,
+                    compartment_ocid,
+                    vault_ocid,
+                    names,
+                    log,
+                )
+            old_fingerprint = (
+                credential["fingerprint"] if credential is not None else None
             )
             log.debug(
                 "Current registered fingerprint before rotate: %s",
@@ -2178,13 +2377,10 @@ def cmd_rotate(args: argparse.Namespace, log: logging.Logger) -> int:
         if args.dry_run:
             log.info(
                 "[DRY-RUN] would generate fresh RSA-%d API key for user '%s', "
-                "upload to OCI, and update 3 Vault secrets "
-                "(%s, %s, %s)",
+                "upload to OCI, and update JSON credential secret '%s'.",
                 RSA_KEY_BITS,
                 names.user,
-                names.secret_private_key,
-                names.secret_fingerprint,
-                names.secret_user_ocid,
+                names.secret_credential,
             )
             log.info("manage-unseal rotate complete (dry_run=True)")
             return 0
@@ -2198,30 +2394,12 @@ def cmd_rotate(args: argparse.Namespace, log: logging.Logger) -> int:
             compartment_ocid=compartment_ocid,
             vault_ocid=vault_ocid,
             mek_ocid=mek_ocid,
-            secret_name=names.secret_private_key,
-            secret_value_bytes=keypair["private_pem"].encode("utf-8"),
-            wait_seconds=args.wait_seconds,
-            interval_seconds=args.interval_seconds,
-            log=log,
-        )
-        _upsert_vault_secret(
-            vaults_client,
-            compartment_ocid=compartment_ocid,
-            vault_ocid=vault_ocid,
-            mek_ocid=mek_ocid,
-            secret_name=names.secret_fingerprint,
-            secret_value_bytes=keypair["fingerprint"].encode("utf-8"),
-            wait_seconds=args.wait_seconds,
-            interval_seconds=args.interval_seconds,
-            log=log,
-        )
-        _upsert_vault_secret(
-            vaults_client,
-            compartment_ocid=compartment_ocid,
-            vault_ocid=vault_ocid,
-            mek_ocid=mek_ocid,
-            secret_name=names.secret_user_ocid,
-            secret_value_bytes=user_ocid.encode("utf-8"),
+            secret_name=names.secret_credential,
+            secret_value_bytes=_serialize_credential_payload(
+                keypair["private_pem"],
+                keypair["fingerprint"],
+                user_ocid,
+            ),
             wait_seconds=args.wait_seconds,
             interval_seconds=args.interval_seconds,
             log=log,
@@ -2243,8 +2421,8 @@ def cmd_rotate(args: argparse.Namespace, log: logging.Logger) -> int:
             log,
         ):
             log.error(
-                "Post-write validation failed: stored secrets do not form a "
-                "consistent credential set after rotate. "
+                "Post-write validation failed: the stored credential does not form "
+                "a consistent set after rotate. "
                 "Inspect with 'manage-unseal show'. "
                 "The prior API key was NOT deleted."
             )
@@ -2327,9 +2505,7 @@ def cmd_show(args: argparse.Namespace, log: logging.Logger) -> int:
                 "user": names.user,
                 "group": names.group,
                 "policy": names.policy,
-                "secret_private_key": names.secret_private_key,
-                "secret_fingerprint": names.secret_fingerprint,
-                "secret_user_ocid": names.secret_user_ocid,
+                "secret_credential": names.secret_credential,
             },
             "compartment": {"name": compartment_name, "ocid": compartment_ocid},
             "vault": {
@@ -2504,87 +2680,61 @@ def cmd_show(args: argparse.Namespace, log: logging.Logger) -> int:
         else:
             report["api_keys"] = []
 
-        # Vault secrets.
-        fp_value = _read_secret_value(
+        # Consolidated Vault credential. The JSON private_key field is read only
+        # in memory to validate its fingerprint and is never included in output.
+        credential_secret = common.lookup_existing_secret(
+            vaults_client,
+            compartment_ocid,
+            vault_ocid,
+            names.secret_credential,
+            log,
+        )
+        credential = _read_credential_payload(
             vaults_client,
             secrets_client,
             compartment_ocid,
             vault_ocid,
-            names.secret_fingerprint,
+            names,
             log,
         )
-        uid_value = _read_secret_value(
-            vaults_client,
-            secrets_client,
-            compartment_ocid,
-            vault_ocid,
-            names.secret_user_ocid,
-            log,
+        credential_secret_active = (
+            credential_secret is not None
+            and getattr(credential_secret, "lifecycle_state", None) == "ACTIVE"
         )
-
-        def _secret_entry(secret_name: str, include_value: bool) -> Dict[str, Any]:
-            s = common.lookup_existing_secret(
-                vaults_client, compartment_ocid, vault_ocid, secret_name, log
-            )
-            if s:
-                entry: Dict[str, Any] = {
-                    "exists": True,
-                    "ocid": s.id,
-                    "lifecycle_state": s.lifecycle_state,
-                }
-                if include_value:
-                    entry["value"] = _read_secret_value(
-                        vaults_client,
-                        secrets_client,
-                        compartment_ocid,
-                        vault_ocid,
-                        secret_name,
-                        log,
-                    )
-                return entry
-            return {"exists": False, "ocid": None}
-
-        report["secrets"] = {
-            "private_key": _secret_entry(names.secret_private_key, include_value=False),
-            "fingerprint": _secret_entry(names.secret_fingerprint, include_value=True),
-            "user_ocid": _secret_entry(names.secret_user_ocid, include_value=False),
+        credential_entry: Dict[str, Any] = {
+            "name": names.secret_credential,
+            "exists": credential_secret is not None,
+            "ocid": getattr(credential_secret, "id", None),
+            "lifecycle_state": (
+                getattr(credential_secret, "lifecycle_state", None)
+                if credential_secret is not None
+                else None
+            ),
+            "valid_json": credential is not None,
+            "private_key_matches_fingerprint": None,
+            "user_ocid_matches_user": None,
         }
-        secrets_active = all(
-            entry.get("exists") and entry.get("lifecycle_state") == "ACTIVE"
-            for entry in report["secrets"].values()
-        )
-
-        # Private-key fingerprint validation (non-sensitive boolean).
-        # Read the private key PEM, derive its fingerprint, and compare to the
-        # stored fingerprint.  The PEM itself is never included in the report.
-        pk_matches_fingerprint: Optional[bool] = None
-        if report["secrets"]["private_key"]["exists"] and fp_value:
-            _pk_raw = _read_secret_value(
-                vaults_client,
-                secrets_client,
-                compartment_ocid,
-                vault_ocid,
-                names.secret_private_key,
-                log,
-            )
-            if _pk_raw is not None:
-                try:
-                    _derived_fp = common.fingerprint_from_private_pem(_pk_raw)
-                    pk_matches_fingerprint = _derived_fp == fp_value
-                except (ValueError, RuntimeError):
-                    pk_matches_fingerprint = False
-            else:
-                pk_matches_fingerprint = False
-        report["secrets"]["private_key"]["matches_fingerprint"] = pk_matches_fingerprint
+        fp_value = credential["fingerprint"] if credential is not None else None
+        uid_value = credential["user_ocid"] if credential is not None else None
+        if credential is not None:
+            credential_entry["fingerprint"] = fp_value
+            try:
+                credential_entry["private_key_matches_fingerprint"] = (
+                    common.fingerprint_from_private_pem(credential["private_key"])
+                    == fp_value
+                )
+            except (ValueError, RuntimeError):
+                credential_entry["private_key_matches_fingerprint"] = False
+            credential_entry["user_ocid_matches_user"] = uid_value == user_ocid
+        report["secrets"] = {"credential": credential_entry}
 
         # Strengthened provisioning_complete: all resources must exist in their
         # expected active/enabled states, membership and policy must be ACTIVE,
         # the policy must be exactly correctly scoped (using the authoritative
-        # compartment name), all three secrets must be ACTIVE, the stored user
-        # OCID must match, the
-        # stored fingerprint must be a live API key, the private key must
-        # derive the same fingerprint, and the KMS key must have the required
-        # AES-256 SOFTWARE shape (matches_expected_shape must be True).
+        # compartment name), the credential secret must be ACTIVE and contain
+        # valid JSON, its stored user OCID must match, its fingerprint must be
+        # a live API key, its private key must derive the same fingerprint, and
+        # the KMS key must have the required AES-256 SOFTWARE shape.
         kms_enabled = kms_key is not None and kms_key.lifecycle_state == "ENABLED"
         user_active = user is not None and user.lifecycle_state == "ACTIVE"
         group_active = group is not None and group.lifecycle_state == "ACTIVE"
@@ -2598,11 +2748,12 @@ def cmd_show(args: argparse.Namespace, log: logging.Logger) -> int:
             and membership_active
             and policy_active
             and report["policy"].get("correctly_scoped") is True
-            and secrets_active
+            and credential_secret_active
+            and credential is not None
             and fp_value is not None
             and fp_value in api_fps
-            and uid_value == user_ocid
-            and pk_matches_fingerprint is True
+            and credential_entry["user_ocid_matches_user"] is True
+            and credential_entry["private_key_matches_fingerprint"] is True
         )
         report["provisioning_complete"] = provisioning_complete
 

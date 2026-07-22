@@ -216,9 +216,11 @@ For `--cluster-name k8s-01` (normalises to `k8s_01`):
 | IAM user | `sa_k8s_01_openbao_unseal` |
 | IAM group | `grp_k8s_01_openbao_unseal` |
 | IAM policy | `policy_k8s_01_openbao_unseal` |
-| Vault secret (private key) | `k8s_01_openbao_unseal_private_key` |
-| Vault secret (fingerprint) | `k8s_01_openbao_unseal_fingerprint` |
-| Vault secret (user OCID) | `k8s_01_openbao_unseal_user_ocid` |
+| Vault credential secret (JSON) | `k8s_01_openbao_unseal_credential` |
+
+The credential secret is one UTF-8 JSON object with `private_key`,
+`fingerprint`, and `user_ocid` fields. OCI Vault stores the JSON as ordinary
+secret content; the private key is never printed or logged by this command.
 
 The IAM policy contains **exactly one** statement, scoped to the per-cluster KMS key only:
 
@@ -229,7 +231,10 @@ Allow group grp_<id>_openbao_unseal to use keys in compartment <compartment>
 
 ##### create
 
-Provisions all per-cluster resources and credentials. Idempotent: if all three Vault secrets already exist, the stored private key derives the stored fingerprint, that fingerprint matches a live API key, and the stored user OCID matches the derived user, the command exits 0 with no mutations.
+Provisions all per-cluster resources and credentials. Idempotent: if the JSON
+credential secret is ACTIVE, the stored private key derives the stored
+fingerprint, that fingerprint matches a live API key, and the stored user OCID
+matches the derived user, the command exits 0 with no mutations.
 
 ```bash
 manage-unseal create --cluster-name k8s-01
@@ -256,9 +261,17 @@ manage-unseal create --cluster-name k8s-01 --dry-run -v
 
 If the unseal user already has 3 API keys (OCI maximum), the command exits with code 5. Pass `--delete-old-api-key` to delete the oldest non-active spare key and make room. The currently registered fingerprint is never deleted automatically.
 
+If the former three-secret contract (`*_private_key`, `*_fingerprint`, and
+`*_user_ocid`) exists and is valid, `create` consolidates it into the JSON
+credential without generating a new API key. The legacy secrets are retained
+for a safe consumer rollout; delete them only after OpenBao has been updated to
+read the JSON credential and has restarted successfully.
+
 ##### rotate
 
-Always generates fresh RSA-4096 key material and pushes new Vault secret versions. IAM infrastructure is verified first (same as `create`).
+Always generates fresh RSA-4096 key material and pushes a new version of the
+single JSON credential secret. IAM infrastructure is verified first (same as
+`create`).
 
 ```bash
 manage-unseal rotate --cluster-name k8s-01
@@ -273,7 +286,11 @@ docker run --rm \
 manage-unseal rotate --cluster-name k8s-01 --delete-old-api-key
 ```
 
-> **Key-rotation lifecycle note:** The three Vault secrets cannot be updated atomically. After a successful `rotate`, the **previous API key is retained** in OCI IAM — it is intentionally not deleted automatically because consumers (e.g. OpenBao instances) may still hold active sessions using it. The recommended workflow is:
+> **Key-rotation lifecycle note:** The credential JSON is updated as one Vault
+> secret version. After a successful `rotate`, the **previous API key is
+> retained** in OCI IAM — it is intentionally not deleted automatically because
+> consumers (e.g. OpenBao instances) may still hold active sessions using it.
+> The recommended workflow is:
 >
 > 1. Run `manage-unseal rotate`.
 > 2. Roll out the new secret generation to all consumers and confirm they are using the new credential.
@@ -283,9 +300,18 @@ manage-unseal rotate --cluster-name k8s-01 --delete-old-api-key
 
 ##### show
 
-Read-only JSON status report. Contains derived names, discovered OCIDs/lifecycle states, the registered fingerprint (never the private key), a `matches_fingerprint` boolean (whether the stored private key derives the same fingerprint as the stored fingerprint secret), membership state, and an overall `provisioning_complete` flag.
+Read-only JSON status report. Contains derived names, discovered OCIDs/lifecycle
+states, the registered fingerprint (never the private key), JSON-shape and
+private-key/fingerprint validation booleans, membership state, and an overall
+`provisioning_complete` flag.
 
-`provisioning_complete` is `true` only when: the unseal KMS key is ENABLED with the expected AES-256 SOFTWARE shape, the IAM user, group, membership, and policy are ACTIVE, the policy is exactly correctly scoped (using the authoritative compartment name from `--summary-file` or `--compartment`), all three secrets are ACTIVE, the stored user OCID matches, the stored fingerprint is a live API key, and the private key derives the same fingerprint.
+`provisioning_complete` is `true` only when: the unseal KMS key is ENABLED with
+the expected AES-256 SOFTWARE shape, the IAM user, group, membership, and
+policy are ACTIVE, the policy is exactly correctly scoped (using the
+authoritative compartment name from `--summary-file` or `--compartment`), the
+credential secret is ACTIVE with valid JSON, the stored user OCID matches, the
+stored fingerprint is a live API key, and the private key derives the same
+fingerprint.
 
 ```bash
 manage-unseal show --cluster-name k8s-01

@@ -132,9 +132,7 @@ def test_derive_names_k8s_01(mu):
     assert names.user == "sa_k8s_01_openbao_unseal"
     assert names.group == "grp_k8s_01_openbao_unseal"
     assert names.policy == "policy_k8s_01_openbao_unseal"
-    assert names.secret_private_key == "k8s_01_openbao_unseal_private_key"
-    assert names.secret_fingerprint == "k8s_01_openbao_unseal_fingerprint"
-    assert names.secret_user_ocid == "k8s_01_openbao_unseal_user_ocid"
+    assert names.secret_credential == "k8s_01_openbao_unseal_credential"
 
 
 def test_derive_names_raw_input_normalised_first(mu):
@@ -153,9 +151,7 @@ def test_derive_names_prefix_pattern(mu):
     assert names.user == f"sa_{base}"
     assert names.group == f"grp_{base}"
     assert names.policy == f"policy_{base}"
-    assert names.secret_private_key == f"{base}_private_key"
-    assert names.secret_fingerprint == f"{base}_fingerprint"
-    assert names.secret_user_ocid == f"{base}_user_ocid"
+    assert names.secret_credential == f"{base}_credential"
 
 
 # ---------------------------------------------------------------------------
@@ -894,8 +890,8 @@ def test_cmd_show_invalid_cluster_name_exit6(mu, mock_unseal_oci):
 # ---------------------------------------------------------------------------
 # J. Check create complete (idempotency logic)
 # ---------------------------------------------------------------------------
-def test_check_create_complete_false_when_secrets_missing(mu):
-    """``_check_create_complete`` returns False when any secret is absent."""
+def test_check_create_complete_false_when_credential_secret_missing(mu):
+    """``_check_create_complete`` returns False when the credential secret is absent."""
     log = logging.getLogger("test_idem_missing")
 
     with patch.object(mu.common, "lookup_existing_secret", return_value=None):
@@ -912,8 +908,8 @@ def test_check_create_complete_false_when_secrets_missing(mu):
     assert result is False
 
 
-def test_check_create_complete_false_when_secret_is_not_active(mu):
-    """A present but CREATING secret cannot make provisioning complete."""
+def test_check_create_complete_false_when_credential_secret_is_not_active(mu):
+    """A present but CREATING credential secret cannot make provisioning complete."""
     creating_secret = MagicMock()
     creating_secret.id = "ocid1.secret.oc1..creating"
     creating_secret.lifecycle_state = "CREATING"
@@ -951,16 +947,15 @@ def test_check_create_complete_false_when_fingerprint_not_in_api_keys(mu, common
     def _fake_lookup(vaults_c, comp_id, vault_id, name, log_arg):  # noqa: ANN001
         return fake_secret
 
-    # _read_secret_value returns the real PEM for the private-key secret,
-    # the matching fingerprint, and a valid user OCID.
+    # _read_secret_value returns the one JSON credential payload.
     def _fake_read(vaults_c, secrets_c, comp_id, vault_id, name, log_arg):  # noqa: ANN001
-        if "private_key" in name:
-            return real_pem
-        if "fingerprint" in name:
-            return real_fp
-        if "user_ocid" in name:
-            return "ocid1.user.oc1..fake"
-        return None
+        return json.dumps(
+            {
+                "private_key": real_pem,
+                "fingerprint": real_fp,
+                "user_ocid": "ocid1.user.oc1..fake",
+            }
+        )
 
     # API keys on the user do NOT contain the matching fingerprint.
     no_matching_key = MagicMock()
@@ -985,7 +980,7 @@ def test_check_create_complete_false_when_fingerprint_not_in_api_keys(mu, common
 
 
 def test_check_create_complete_true_when_all_match(mu, common_mod):
-    """``_check_create_complete`` returns True when all five conditions hold."""
+    """``_check_create_complete`` returns True when all conditions hold."""
     log = logging.getLogger("test_idem_complete")
     user_ocid = "ocid1.user.oc1..real"
 
@@ -999,13 +994,13 @@ def test_check_create_complete_true_when_all_match(mu, common_mod):
     fake_secret.lifecycle_state = "ACTIVE"
 
     def _fake_read(vaults_c, secrets_c, comp_id, vault_id, name, log_arg):  # noqa: ANN001
-        if "private_key" in name:
-            return real_pem
-        if "fingerprint" in name:
-            return registered_fp
-        if "user_ocid" in name:
-            return user_ocid
-        return None
+        return json.dumps(
+            {
+                "private_key": real_pem,
+                "fingerprint": registered_fp,
+                "user_ocid": user_ocid,
+            }
+        )
 
     matching_key = MagicMock()
     matching_key.fingerprint = registered_fp
@@ -1026,6 +1021,45 @@ def test_check_create_complete_true_when_all_match(mu, common_mod):
             log,
         )
     assert result is True
+
+
+@pytest.mark.parametrize(
+    "raw_value",
+    [
+        "not-json",
+        "[]",
+        json.dumps({"fingerprint": "aa:bb", "user_ocid": "ocid1.user.oc1..fake"}),
+        json.dumps(
+            {
+                "private_key": "key",
+                "fingerprint": "",
+                "user_ocid": "ocid1.user.oc1..fake",
+            }
+        ),
+    ],
+)
+def test_check_create_complete_false_for_invalid_credential_json(mu, raw_value):
+    """The consolidated credential must be a JSON object with all string fields."""
+    active_secret = MagicMock()
+    active_secret.id = "ocid1.secret.oc1..credential"
+    active_secret.lifecycle_state = "ACTIVE"
+
+    with (
+        patch.object(mu.common, "lookup_existing_secret", return_value=active_secret),
+        patch.object(mu, "_read_secret_value", return_value=raw_value),
+    ):
+        result = mu._check_create_complete(
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+            "ocid1.compartment.oc1..fake",
+            "ocid1.vault.oc1..fake",
+            mu.derive_names("k8s_01"),
+            "ocid1.user.oc1..fake",
+            logging.getLogger("test_invalid_credential_json"),
+        )
+
+    assert result is False
 
 
 # ---------------------------------------------------------------------------
@@ -1131,7 +1165,7 @@ def test_fingerprint_from_private_pem_never_logs_key(common_mod, caplog):
 # M. Strengthened _check_create_complete (private key validation)
 # ---------------------------------------------------------------------------
 def test_check_create_complete_false_when_private_key_malformed(mu, common_mod):
-    """Returns False when the private-key secret contains a malformed PEM."""
+    """Returns False when the JSON credential contains a malformed PEM."""
     log = logging.getLogger("test_idem_pk_malformed")
     user_ocid = "ocid1.user.oc1..real"
     keypair = common_mod.generate_unencrypted_rsa_api_key(2048)
@@ -1142,13 +1176,13 @@ def test_check_create_complete_false_when_private_key_malformed(mu, common_mod):
     fake_secret.lifecycle_state = "ACTIVE"
 
     def _fake_read(vaults_c, secrets_c, comp_id, vault_id, name, log_arg):  # noqa: ANN001
-        if "private_key" in name:
-            return "not a valid pem at all"
-        if "fingerprint" in name:
-            return registered_fp
-        if "user_ocid" in name:
-            return user_ocid
-        return None
+        return json.dumps(
+            {
+                "private_key": "not a valid pem at all",
+                "fingerprint": registered_fp,
+                "user_ocid": user_ocid,
+            }
+        )
 
     matching_key = MagicMock()
     matching_key.fingerprint = registered_fp
@@ -1188,13 +1222,13 @@ def test_check_create_complete_false_when_private_key_fingerprint_mismatches(
     fake_secret.lifecycle_state = "ACTIVE"
 
     def _fake_read(vaults_c, secrets_c, comp_id, vault_id, name, log_arg):  # noqa: ANN001
-        if "private_key" in name:
-            return key_a["private_pem"]  # private key from key_a
-        if "fingerprint" in name:
-            return key_b["fingerprint"]  # fingerprint from key_b → mismatch
-        if "user_ocid" in name:
-            return user_ocid
-        return None
+        return json.dumps(
+            {
+                "private_key": key_a["private_pem"],
+                "fingerprint": key_b["fingerprint"],
+                "user_ocid": user_ocid,
+            }
+        )
 
     any_key = MagicMock()
     any_key.fingerprint = key_b["fingerprint"]
@@ -1324,8 +1358,12 @@ def test_create_protects_registered_fingerprint_when_repairing(
     )
     monkeypatch.setattr(
         mu,
-        "_read_secret_value",
-        lambda *a, **kw: protected_fingerprint,
+        "_read_credential_payload",
+        lambda *a, **kw: {
+            "private_key": "private",
+            "fingerprint": protected_fingerprint,
+            "user_ocid": "ocid1.user.oc1..unseal_fake",
+        },
     )
     monkeypatch.setattr(
         mu,
@@ -1344,6 +1382,49 @@ def test_create_protects_registered_fingerprint_when_repairing(
     args = _make_unseal_args(dry_run=False, delete_old_api_key=True)
     assert mu.cmd_create(args, logging.getLogger("test_create_protected")) == 0
     assert cap_kwargs.get("protected_fingerprint") == protected_fingerprint
+
+
+def test_create_consolidates_valid_legacy_credentials_without_new_api_key(
+    mu, mock_unseal_oci, monkeypatch
+):
+    """A valid legacy triplet is copied to JSON without changing the API key."""
+    user_ocid = "ocid1.user.oc1..unseal_fake"
+    legacy = {
+        "private_key": "legacy-private-key",
+        "fingerprint": "aa:bb:cc:dd",
+        "user_ocid": user_ocid,
+    }
+    check_results = iter([False, True])
+    upsert_kwargs: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        mu, "_check_create_complete", lambda *a, **kw: next(check_results)
+    )
+    monkeypatch.setattr(mu, "_read_legacy_credential_payload", lambda *a, **kw: legacy)
+    monkeypatch.setattr(mu, "_credential_payload_is_valid", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        mu, "_require_legacy_credential_secrets_use_mek", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        mu,
+        "_upsert_vault_secret",
+        lambda *a, **kw: upsert_kwargs.update(kw) or "ocid1.secret.oc1..credential",
+    )
+    monkeypatch.setattr(
+        mu,
+        "_generate_and_upload_api_key",
+        lambda *a, **kw: pytest.fail("legacy consolidation must not create an API key"),
+    )
+
+    assert (
+        mu.cmd_create(
+            _make_unseal_args(dry_run=False),
+            logging.getLogger("test_legacy_consolidation"),
+        )
+        == 0
+    )
+    assert upsert_kwargs["secret_name"] == "k8s_01_openbao_unseal_credential"
+    assert json.loads(upsert_kwargs["secret_value_bytes"].decode("utf-8")) == legacy
 
 
 # ---------------------------------------------------------------------------
@@ -2182,7 +2263,7 @@ def test_cmd_show_matches_expected_shape_false_for_wrong_shape(
 
 
 # ---------------------------------------------------------------------------
-# T. Credential secrets must use the configured MEK
+# T. Consolidated credential secret must use the configured MEK
 # ---------------------------------------------------------------------------
 def _secret_with_key(key_id: str) -> MagicMock:
     secret = MagicMock()
@@ -2192,10 +2273,10 @@ def _secret_with_key(key_id: str) -> MagicMock:
     return secret
 
 
-def test_contract_secret_with_wrong_mek_fails_before_credential_generation(
+def test_credential_secret_with_wrong_mek_fails_before_credential_generation(
     mu, mock_unseal_oci, monkeypatch
 ):
-    """A mismatched secret key fails closed before an API key can be uploaded."""
+    """A mismatched credential secret key fails closed before API-key generation."""
     wrong_secret = _secret_with_key("ocid1.key.oc1..not_the_mek")
     monkeypatch.setattr(
         mu.common,
@@ -2229,8 +2310,8 @@ def test_upsert_refuses_to_overwrite_secret_using_wrong_mek(mu):
                 compartment_ocid="ocid1.compartment.oc1..fake",
                 vault_ocid="ocid1.vault.oc1..fake",
                 mek_ocid="ocid1.key.oc1..mek",
-                secret_name="k8s_01_openbao_unseal_private_key",
-                secret_value_bytes=b"private-key",
+                secret_name="k8s_01_openbao_unseal_credential",
+                secret_value_bytes=b'{"private_key":"private-key"}',
                 wait_seconds=1,
                 interval_seconds=1,
                 log=logging.getLogger("test_upsert_wrong_mek"),
