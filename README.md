@@ -115,7 +115,7 @@ total 40
 - **Compartment** (`cpm_automation`) — at the tenancy root.
 - **Object Storage bucket** (`bucket_automation`) — versioning enabled, `NoPublicAccess`.
 - **KMS Vault** (`vault_automation`) — `DEFAULT` (free) vault type.
-- **Master Encryption Key** (`mek_automation`) — AES‑256, software protection. Required for any future secret stored in the vault.
+- **Master Encryption Key** (`mek_automation`) — AES‑256, software protection. The default key for new `manage-vault add-secret` secrets.
 - **IAM user** (`sa_automation`) — service account, with a freshly generated RSA‑4096 API key uploaded.
 - **IAM group** (`grp_automation`) — with `sa_automation` added as a member.
 - **IAM policy** (`policy_grp_automation`) — at the tenancy root, with:
@@ -160,6 +160,20 @@ Name                       Lifecycle  Tags
 
 ##### add-secret
 
+New secrets use the uniquely enabled key named `mek_automation` by default.
+Other enabled keys, such as a dedicated OpenBao auto-unseal key, may remain
+enabled in the same vault. To use another key deliberately, pass its exact
+display name with `--mek-name`. A missing, disabled, or duplicate enabled key
+name fails with exit code 6; the command never falls back to a different key.
+
+```bash
+# Default: encrypt the new secret with mek_automation.
+manage-vault add-secret -n test
+
+# Intentional override for a uniquely enabled non-default key.
+manage-vault add-secret -n test --mek-name application_mek
+```
+
 ```bash
 
 manage-vault add-secret -n test
@@ -190,6 +204,11 @@ EOF
 #Special characters like $ & % are safe here
 #EOF
 ```
+
+`update-secret` and `get-secret` do not take `--mek-name`: OCI retains the
+existing secret's key association for new versions and reads. They cannot
+re-key an existing secret; create a replacement secret if a different key is
+required.
 
 ##### delete-secret
 
@@ -379,7 +398,7 @@ pip install -e . -r py-requirements-dev.txt
 | `3` | OCI config file missing or invalid (`initialize-oci`, `manage-vault`, `manage-unseal`); summary file missing/unreadable/invalid (`manage-vault` with `--summary-file`, `manage-unseal` with `--summary-file`, `update-github-secrets`). | All |
 | `4` | OCI authentication preflight failed (`initialize-oci`, `manage-vault`, `manage-unseal`); `gh` auth or repo preflight failed (`update-github-secrets`). | All |
 | `5` | IAM user already has the OCI maximum (3) API keys (`initialize-oci`, `manage-unseal`); compartment, vault, or secret not found (`manage-vault`, `manage-unseal`). | `initialize-oci`, `manage-vault`, `manage-unseal` |
-| `6` | Vault has zero or multiple `ENABLED` master encryption keys (auto-pick failed) (`add-secret`); invalid `--cluster-name` after normalisation (`manage-unseal`). | `add-secret`, `manage-unseal` |
+| `6` | `add-secret` could not resolve exactly one requested `ENABLED` master encryption key; invalid `--cluster-name` after normalisation (`manage-unseal`). | `add-secret`, `manage-unseal` |
 | `7` | Permission denied on secret create/update. | `add-secret` |
 | `8` | Secret name held by a `*_DELETION`-state resource. | `add-secret` |
 | `9` | Bad value-source argument: empty stdin with `--secret-value -`, non-TTY stdin without `--secret-value`, interactive entry aborted, mismatched confirmations after 3 attempts, or empty interactive value. | `add-secret` |

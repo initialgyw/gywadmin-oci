@@ -46,7 +46,7 @@ Exit codes
 | 3    | OCI config file missing or invalid. |
 | 4    | OCI authentication preflight failed. |
 | 5    | Compartment, vault, or secret not found (or ``update-secret`` target missing). |
-| 6    | Vault has zero or multiple ENABLED master encryption keys (auto-pick failed); ``add-secret``. |
+| 6    | ``add-secret`` could not resolve exactly one requested ENABLED master encryption key. |
 | 7    | Permission denied on secret create/update. |
 | 8    | Secret name held by a ``*_DELETION``-state resource. |
 | 9    | Bad value-source argument: empty stdin with ``--secret-value -``, non-TTY stdin without ``--secret-value``, interactive entry aborted, mismatched confirmations after 3 attempts, or empty interactive value. |
@@ -96,6 +96,7 @@ DEFAULT_OCI_CONFIG = "~/.oci/config"
 DEFAULT_OCI_PROFILE = "DEFAULT"
 DEFAULT_WAIT_SECONDS = 600
 DEFAULT_INTERVAL_SECONDS = 10
+DEFAULT_MEK_NAME = "mek_automation"
 
 # Per-subcommand logger names.
 _LOGGER_ADD_SECRET = "manage-vault.add-secret"
@@ -190,6 +191,24 @@ def _build_common_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _nonempty_mek_name(value: str) -> str:
+    """Normalize a non-empty KMS key display name for argparse.
+
+    Args:
+        value: Raw command-line argument.
+
+    Returns:
+        The surrounding-whitespace-trimmed key display name.
+
+    Raises:
+        argparse.ArgumentTypeError: If the name is empty after trimming.
+    """
+    name = value.strip()
+    if not name:
+        raise argparse.ArgumentTypeError("must not be empty or whitespace-only")
+    return name
+
+
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     """Parse command-line arguments.
 
@@ -225,7 +244,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
             f"{common.MAX_SECRETS_ALWAYS_FREE} secrets — warns at "
             f"{common.WARN_SECRETS_THRESHOLD} and hard-fails (exit 13) at "
             f"{common.MAX_SECRETS_ALWAYS_FREE}. The master encryption key is "
-            "auto-picked: the vault must contain exactly one ENABLED key."
+            f"selected by exact display name and defaults to {DEFAULT_MEK_NAME!r}."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -235,6 +254,16 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "-n",
         required=True,
         help="Display name of the secret to create.",
+    )
+    sp_add.add_argument(
+        "--mek-name",
+        type=_nonempty_mek_name,
+        default=DEFAULT_MEK_NAME,
+        metavar="NAME",
+        help=(
+            "Exact display name of the ENABLED KMS key that encrypts this new "
+            "secret. Other enabled keys are allowed. (default: %(default)s)"
+        ),
     )
     sp_add.add_argument(
         "--secret-value",
@@ -1067,7 +1096,12 @@ def cmd_add_secret(args: argparse.Namespace, log: logging.Logger) -> int:
             kms_vault_client, compartment_ocid, args.vault_name, log
         )
         mek_ocid, mek_name = common.auto_pick_mek(
-            config, compartment_ocid, mgmt_endpoint, args.vault_name, log
+            config,
+            compartment_ocid,
+            mgmt_endpoint,
+            args.vault_name,
+            log,
+            mek_name=args.mek_name,
         )
 
         existing = common.lookup_existing_secret(
@@ -1201,10 +1235,9 @@ def _classify_versions(versions: List[Any]) -> Tuple[List[Any], List[Any]]:
     """Split a list of ``SecretVersionSummary`` into (active, pending_deletion).
 
     A version is "active" when its ``stages`` list intersects
-    :data:`_ACTIVE_VERSION_STAGES` AND it is not in a deletion lifecycle state.
+    :data:`_ACTIVE_VERSION_STAGES` AND it is not scheduled for deletion.
 
-    A version is "pending_deletion" when its ``lifecycle_state`` is
-    ``PENDING_DELETION`` or ``SCHEDULING_DELETION``.
+    A version is "pending_deletion" when it has a scheduled ``time_of_deletion``.
 
     DEPRECATED-only versions that are not yet scheduled for deletion are
     counted as neither (they no longer occupy an active slot but have not
@@ -1219,8 +1252,7 @@ def _classify_versions(versions: List[Any]) -> Tuple[List[Any], List[Any]]:
     active: List[Any] = []
     pending_del: List[Any] = []
     for v in versions:
-        lc = getattr(v, "lifecycle_state", None)
-        if lc in common.DELETION_LIFECYCLE_STATES:
+        if getattr(v, "time_of_deletion", None) is not None:
             pending_del.append(v)
             continue
         stages = set(getattr(v, "stages", None) or [])
@@ -1270,20 +1302,7 @@ def _deprecate_and_schedule_delete_each(
         vnum = int(getattr(v, "version_number"))
         try:
             log.info(
-                "Deprecating version %d of '%s' (post-push cleanup)",
-                vnum,
-                secret_name,
-            )
-            vaults_client.update_secret_version(
-                secret_id,
-                vnum,
-                oci.vault.models.UpdateSecretVersionDetails(
-                    version_number=vnum,
-                    stages=["DEPRECATED"],
-                ),
-            )
-            log.info(
-                "Scheduling deletion of version %d of '%s' at %s",
+                "Scheduling deletion of version %d of '%s' at %s (already DEPRECATED post-push)",
                 vnum,
                 secret_name,
                 tod_str,
@@ -1295,9 +1314,19 @@ def _deprecate_and_schedule_delete_each(
                     time_of_deletion=tod
                 ),
             )
+            # Wait for the parent secret to return to ACTIVE state so that
+            # subsequent version deletion requests do not fail with a 409 UPDATING conflict.
+            common.wait_for_state(
+                lambda: vaults_client.get_secret(secret_id),
+                ["ACTIVE"],
+                label=f"secret {secret_name}",
+                log=log,
+                max_wait=60,
+                interval=2,
+            )
         except ServiceError as exc:
             log.error(
-                "Failed to deprecate/schedule-delete version %d of '%s' "
+                "Failed to schedule deletion of version %d of '%s' "
                 "(status=%s code=%s): %s — continuing",
                 vnum,
                 secret_name,
@@ -1309,7 +1338,7 @@ def _deprecate_and_schedule_delete_each(
             continue
         except (RuntimeError, OSError) as exc:
             log.error(
-                "Failed to deprecate/schedule-delete version %d of '%s': %s — continuing",
+                "Failed to schedule deletion of version %d of '%s': %s — continuing",
                 vnum,
                 secret_name,
                 exc,
@@ -1547,10 +1576,8 @@ def cmd_update_secret(args: argparse.Namespace, log: logging.Logger) -> int:
             current_version = getattr(secret, "current_version_number", None)
             lifecycle_state = secret.lifecycle_state
 
-            # Post-push cleanup: deprecate + schedule-delete every active
-            # version that is NOT the newly-current version. Best-effort: a
-            # failure flips cleanup_failed but does not abort.
-            new_current_number = current_version
+            # Post-push cleanup: schedule-delete every deprecated version.
+            # Best-effort: a failure flips cleanup_failed but does not abort.
             try:
                 post_versions = common.list_all(
                     vaults_client.list_secret_versions, secret_id=existing.id
@@ -1566,17 +1593,15 @@ def cmd_update_secret(args: argparse.Namespace, log: logging.Logger) -> int:
                 cleanup_failed = True
                 post_versions = []
 
-            post_active, _ = _classify_versions(post_versions)
             to_prune = [
                 v
-                for v in post_active
-                if int(getattr(v, "version_number", -1)) != new_current_number
+                for v in post_versions
+                if "DEPRECATED" in (getattr(v, "stages", None) or [])
+                and getattr(v, "time_of_deletion", None) is None
             ]
             log.info(
-                "Post-push cleanup: %d active version(s) remain besides the new "
-                "CURRENT (v%s); deprecating + scheduling-delete each.",
+                "Post-push cleanup: %d deprecated version(s) found to prune.",
                 len(to_prune),
-                new_current_number,
             )
             cleanup_failed_some = _deprecate_and_schedule_delete_each(
                 vaults_client,
